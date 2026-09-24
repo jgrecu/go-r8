@@ -17,19 +17,21 @@ func NewCPU() *CPU {
 	return &CPU{}
 }
 
-func (cpu *CPU) Step() {
-	op := cpu.Mem[cpu.PC]
-	if op == INC {
-		cpu.A++
-	}
+func (cpu *CPU) Step() bool {
+	opcode := cpu.Mem[cpu.PC]
 	cpu.PC++
+	switch opcode {
+	case INC:
+		cpu.A++
+	case NOP:
+	// No operation to do
+	case HALT:
+		return false
+	}
+	return true
 }
 
 func (cpu *CPU) Run() {
-	for _, operation := range cpu.Mem {
-		cpu.Step()
-		if operation == HALT {
-			break
-		}
+	for cpu.Step() {
 	}
 }
