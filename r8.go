@@ -8,8 +8,9 @@ type CPU struct {
 }
 
 const (
-	NOP = 0x01
-	INC = 0x30
+	HALT = 0x00
+	NOP  = 0x01
+	INC  = 0x30
 )
 
 func NewCPU() *CPU {
@@ -22,4 +23,13 @@ func (cpu *CPU) Step() {
 		cpu.A++
 	}
 	cpu.PC++
+}
+
+func (cpu *CPU) Run() {
+	for _, operation := range cpu.Mem {
+		cpu.Step()
+		if operation == HALT {
+			break
+		}
+	}
 }

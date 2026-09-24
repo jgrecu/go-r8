@@ -50,10 +50,9 @@ func TestIncIncrementsA(t *testing.T) {
 
 func TestHaltStopsCPU(t *testing.T) {
 	t.Parallel()
-
 	cpu := r8.NewCPU()
 	cpu.Mem[0] = r8.NOP
-	cpu.Mem[1] = r8.HALT
+	cpu.Mem[2] = r8.HALT
 	cpu.Run()
 	if cpu.PC != 2 {
 		t.Errorf("want PC == 2, got %d", cpu.PC)
