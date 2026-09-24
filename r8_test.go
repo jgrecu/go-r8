@@ -58,3 +58,15 @@ func TestHaltStopsCPU(t *testing.T) {
 		t.Errorf("want PC == 2, got %d", cpu.PC)
 	}
 }
+
+func TestDecDecrementsA(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Mem[0] = r8.INC
+	cpu.Mem[1] = r8.DEC
+	cpu.Step()
+	cpu.Step()
+	if cpu.A != 0 {
+		t.Errorf("want A == 0, got %d", cpu.A)
+	}
+}

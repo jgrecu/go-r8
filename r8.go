@@ -11,6 +11,7 @@ const (
 	HALT = 0x00
 	NOP  = 0x01
 	INC  = 0x30
+	DEC  = 0x40
 )
 
 func NewCPU() *CPU {
@@ -23,6 +24,8 @@ func (cpu *CPU) Step() bool {
 	switch opcode {
 	case INC:
 		cpu.A++
+	case DEC:
+		cpu.A--
 	case NOP:
 	// No operation to do
 	case HALT:
