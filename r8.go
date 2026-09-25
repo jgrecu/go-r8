@@ -1,10 +1,12 @@
 // Package r8 emulates a simple CPU called the R8.
 package r8
 
+// https://github.com/bitfield/r8/blob/main/crates/rx82/README.md#the-rx82-architecture
+// R8 CPU clocked at 4Mhz, 64KiB of static RAM, an 8-bit data bus, and a 16-bit address bus.
 type CPU struct {
-	PC  int
+	PC  uint16
 	Mem [65536]int
-	A   int
+	A   byte
 }
 
 const (

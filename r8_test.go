@@ -70,3 +70,36 @@ func TestDecDecrementsA(t *testing.T) {
 		t.Errorf("want A == 0, got %d", cpu.A)
 	}
 }
+
+func TestIncWrapsAFrom255To0(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Mem[0] = r8.INC
+	cpu.A = 255
+	cpu.Step()
+	if cpu.A != 0 {
+		t.Errorf("want A == 0, got %d", cpu.A)
+	}
+}
+
+func TestDecWrapsAFrom0To255(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Mem[0] = r8.DEC
+	cpu.A = 0
+	cpu.Step()
+	if cpu.A != 255 {
+		t.Errorf("want A == 255, got %d", cpu.A)
+	}
+}
+
+func TestStepWrapsPCFrom65535To0(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Mem[65535] = r8.NOP
+	cpu.PC = 65535
+	cpu.Step()
+	if cpu.PC != 0 {
+		t.Errorf("want PC == 0, got %d", cpu.PC)
+	}
+}
