@@ -13,24 +13,22 @@ func main() {
 		fmt.Println("you need the file name as first paramater")
 		return
 	}
-	lines := readFile(os.Args[1])
-
-	program := r8.Assemble(lines)
-
-	err := os.WriteFile("program.bin", program, 0o644)
-	if err != nil {
-		fmt.Println(err)
-	}
-}
-
-func readFile(path string) []string {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	// should we fail on an empty source file?
+	lines := processData(data)
+	program := r8.Assemble(lines)
+
+	err = os.WriteFile("program.bin", program, 0o644)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func processData(data []byte) []string {
 	if len(data) == 0 {
 		return []string{}
 	}
