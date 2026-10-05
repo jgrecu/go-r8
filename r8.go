@@ -70,10 +70,10 @@ func (cpu *CPU) LoadProgram(program []byte) error {
 }
 
 func (cpu *CPU) String() string {
-	return fmt.Sprintf("next %q => %04d > %07d", strings.ToUpper(Disasemble(cpu.Mem[cpu.PC])), cpu.PC, cpu.A)
+	return fmt.Sprintf("next %q => %04d > %07d", strings.ToUpper(byteToString(cpu.Mem[cpu.PC])), cpu.PC, cpu.A)
 }
 
-func Disasemble(b byte) string {
+func byteToString(b byte) string {
 	switch b {
 	case NOP:
 		return "nop"
@@ -88,7 +88,7 @@ func Disasemble(b byte) string {
 	}
 }
 
-func Asemble(s string) byte {
+func stringToByte(s string) byte {
 	s = strings.ToLower(s)
 	switch s {
 	case "nop":
@@ -102,4 +102,21 @@ func Asemble(s string) byte {
 	default:
 		return NOP
 	}
+}
+
+func Disassemble(data []byte) []string {
+	lines := make([]string, len(data))
+	for i, v := range data {
+		lines[i] = byteToString(v)
+	}
+	return lines
+}
+
+func Assemble(lines []string) []byte {
+	program := make([]byte, len(lines))
+	for i, v := range lines {
+		program[i] = stringToByte(strings.ToLower(v))
+	}
+
+	return program
 }

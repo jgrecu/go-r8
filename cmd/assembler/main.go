@@ -5,11 +5,26 @@ import (
 	"os"
 	"strings"
 
-	r8 "github.com/jgrecu/go-r8"
+	"github.com/jgrecu/go-r8"
 )
 
 func main() {
-	data, err := os.ReadFile("program.r8")
+	if len(os.Args) < 2 {
+		fmt.Println("you need the file name as first paramater")
+		return
+	}
+	lines := readFile(os.Args[1])
+
+	program := r8.Assemble(lines)
+
+	err := os.WriteFile("program.bin", program, 0o644)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func readFile(path string) []string {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -17,22 +32,11 @@ func main() {
 
 	// should we fail on an empty source file?
 	if len(data) == 0 {
-		fmt.Fprintln(os.Stdout, "source file is empty")
-		os.Exit(0)
+		return []string{}
 	}
 
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 	content = strings.Trim(content, "\n")
 	lines := strings.Split(content, "\n")
-
-	program := make([]byte, len(lines))
-	for i, v := range lines {
-		program[i] = r8.Asemble(strings.ToLower(v))
-	}
-
-	//program := []byte{r8.INC, r8.INC, r8.DEC, r8.DEC, r8.HALT}
-	err = os.WriteFile("program.bin", program, 0o644)
-	if err != nil {
-		fmt.Println(err)
-	}
+	return lines
 }

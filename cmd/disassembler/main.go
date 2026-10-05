@@ -9,23 +9,17 @@ import (
 )
 
 func main() {
-	data, err := os.ReadFile("program.bin")
+	if len(os.Args) < 2 {
+		fmt.Println("you need the file name as first paramater")
+		return
+	}
+	data, err := os.ReadFile(os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	// should we fail on an empty source file?
-	if len(data) == 0 {
-		fmt.Fprintln(os.Stdout, "binary file is empty")
-		os.Exit(0)
-	}
-
-	lines := make([]string, len(data))
-	for i, v := range data {
-		lines[i] = r8.Disasemble(v)
-	}
-
+	lines := r8.Disassemble(data)
 	srcData := []byte(strings.Join(lines, "\n") + "\n")
 
 	err = os.WriteFile("program.src", srcData, 0o644)
