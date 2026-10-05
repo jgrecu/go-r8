@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // https://github.com/bitfield/r8/blob/main/crates/rx82/README.md#the-rx82-architecture
@@ -69,20 +70,36 @@ func (cpu *CPU) LoadProgram(program []byte) error {
 }
 
 func (cpu *CPU) String() string {
-	return fmt.Sprintf("next %q => %04d > %07d", Disasemble(cpu.Mem[cpu.PC]), cpu.PC, cpu.A)
+	return fmt.Sprintf("next %q => %04d > %07d", strings.ToUpper(Disasemble(cpu.Mem[cpu.PC])), cpu.PC, cpu.A)
 }
 
 func Disasemble(b byte) string {
 	switch b {
 	case NOP:
-		return "NOP"
+		return "nop"
 	case INC:
-		return "INC"
+		return "inc"
 	case DEC:
-		return "DEC"
+		return "dec"
 	case HALT:
-		return "HALT"
+		return "halt"
 	default:
 		return "unimplemented"
+	}
+}
+
+func Asemble(s string) byte {
+	s = strings.ToLower(s)
+	switch s {
+	case "nop":
+		return NOP
+	case "inc":
+		return INC
+	case "dec":
+		return DEC
+	case "halt":
+		return HALT
+	default:
+		return NOP
 	}
 }
