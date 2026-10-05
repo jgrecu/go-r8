@@ -17,10 +17,9 @@ func main() {
 	cpu.LoadFile(os.Args[1])
 	scan := bufio.NewScanner(os.Stdin)
 
-	fmt.Println("  PC > A")
+	fmt.Println("Next OP       PC > A")
 	fmt.Print(cpu)
 	for scan.Scan() {
-		// fmt.Printf("next %q => ", r8.Disasemble(cpu.Mem[cpu.PC]))
 		cpu.Step()
 		fmt.Print(cpu)
 		if scan.Err() != nil {
