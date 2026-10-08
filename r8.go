@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,12 @@ type CPU struct {
 	Mem [MEMSIZE]byte
 }
 
+type instruction struct {
+	mnemonic string
+	operands int // number of operand bytes following the op code
+	exec     func(cpu *CPU) bool
+}
+
 const (
 	HALT byte = 0x00
 	NOP  byte = 0x01
@@ -25,6 +32,21 @@ const (
 	MEMSIZE = 65536
 )
 
+var instructions = map[byte]instruction{
+	HALT: {"halt", 0, func(cpu *CPU) bool { return false }},
+	NOP:  {"nop", 0, func(cpu *CPU) bool { return true }},
+	INC:  {"inc", 0, func(cpu *CPU) bool { cpu.A++; return true }},
+	DEC:  {"dec", 0, func(cpu *CPU) bool { cpu.A--; return true }},
+}
+
+var opcodes = func() map[string]byte {
+	m := make(map[string]byte, len(instructions))
+	for op, inst := range instructions {
+		m[inst.mnemonic] = op
+	}
+	return m
+}()
+
 func NewCPU() *CPU {
 	return &CPU{}
 }
@@ -32,17 +54,11 @@ func NewCPU() *CPU {
 func (cpu *CPU) Step() bool {
 	opcode := cpu.Mem[cpu.PC]
 	cpu.PC++
-	switch opcode {
-	case INC:
-		cpu.A++
-	case DEC:
-		cpu.A--
-	case NOP:
-	// No operation to do
-	case HALT:
+	intst, ok := instructions[opcode]
+	if !ok {
 		return false
 	}
-	return true
+	return intst.exec(cpu)
 }
 
 func (cpu *CPU) Run() {
@@ -70,53 +86,67 @@ func (cpu *CPU) LoadProgram(program []byte) error {
 }
 
 func (cpu *CPU) String() string {
-	return fmt.Sprintf("next %q => %04d > %07d", strings.ToUpper(byteToString(cpu.Mem[cpu.PC])), cpu.PC, cpu.A)
+	return fmt.Sprintf("next %-6q => %04d > %07d", strings.ToUpper(byteToString(cpu.Mem[cpu.PC])), cpu.PC, cpu.A)
 }
 
 func byteToString(b byte) string {
-	switch b {
-	case NOP:
-		return "nop"
-	case INC:
-		return "inc"
-	case DEC:
-		return "dec"
-	case HALT:
-		return "halt"
-	default:
-		return "unimplemented"
+	if inst, ok := instructions[b]; ok {
+		return inst.mnemonic
 	}
-}
-
-func stringToByte(s string) byte {
-	s = strings.ToLower(s)
-	switch s {
-	case "nop":
-		return NOP
-	case "inc":
-		return INC
-	case "dec":
-		return DEC
-	case "halt":
-		return HALT
-	default:
-		return NOP
-	}
+	return "unknown"
 }
 
 func Disassemble(data []byte) []string {
-	lines := make([]string, len(data))
-	for i, v := range data {
-		lines[i] = byteToString(v)
+	lines := make([]string, 0)
+	pending := 0
+
+	for _, b := range data {
+		if pending > 0 {
+			lines[len(lines)-1] += fmt.Sprintf(" %d", b)
+			pending--
+			continue
+		}
+
+		inst, ok := instructions[b]
+		if !ok {
+			lines = append(lines, "unknown")
+			continue
+		}
+
+		lines = append(lines, inst.mnemonic)
+		pending = inst.operands
 	}
 	return lines
 }
 
-func Assemble(lines []string) []byte {
-	program := make([]byte, len(lines))
-	for i, v := range lines {
-		program[i] = stringToByte(strings.ToLower(v))
+func Assemble(tokens []string) ([]byte, error) {
+	program := make([]byte, 0)
+	var current string // mnemonic waiting for operands
+	pending := 0
+
+	for _, tok := range tokens {
+		if pending > 0 {
+			v, err := strconv.ParseUint(tok, 0, 8)
+			if err != nil {
+				return []byte{}, fmt.Errorf("%s: bad operand %q: %w", current, tok, err)
+			}
+			program = append(program, byte(v))
+			pending--
+			continue
+		}
+
+		op, ok := opcodes[strings.ToLower(tok)]
+		if !ok {
+			return []byte{}, fmt.Errorf("unknown instruction %q", tok)
+		}
+		program = append(program, op)
+		current = tok
+		pending = instructions[op].operands
 	}
 
-	return program
+	if pending > 0 {
+		return nil, fmt.Errorf("%s: missing operand", current)
+	}
+
+	return program, nil
 }
