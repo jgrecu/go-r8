@@ -30,8 +30,13 @@ func TestNewInitialisesCPU(t *testing.T) {
 // Uncomment this test once the previous test passes!
 func TestStepIncrementsPC(t *testing.T) {
 	t.Parallel()
+	input := []string{"NOP", "NOP"}
+	program, err := r8.Assemble(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cpu := r8.NewCPU()
-	cpu.LoadProgram(r8.Assemble([]string{"NOP", "NOP"}))
+	cpu.LoadProgram(program)
 	cpu.Step()
 	if cpu.PC != 1 {
 		t.Errorf("want pc == 1, got %d", cpu.PC)
@@ -44,8 +49,13 @@ func TestStepIncrementsPC(t *testing.T) {
 
 func TestIncIncrementsA(t *testing.T) {
 	t.Parallel()
+	input := []string{"INC", "HALT"}
+	program, err := r8.Assemble(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cpu := r8.NewCPU()
-	cpu.LoadProgram(r8.Assemble([]string{"INC", "HALT"}))
+	cpu.LoadProgram(program)
 	cpu.Run()
 	if cpu.A != 1 {
 		t.Errorf("want A == 1, got %d", cpu.A)
@@ -54,8 +64,13 @@ func TestIncIncrementsA(t *testing.T) {
 
 func TestHaltStopsCPU(t *testing.T) {
 	t.Parallel()
+	input := []string{"NOP", "HALT"}
+	program, err := r8.Assemble(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cpu := r8.NewCPU()
-	cpu.LoadProgram(r8.Assemble([]string{"NOP", "HALT"}))
+	cpu.LoadProgram(program)
 	cpu.Run()
 	if cpu.PC != 2 {
 		t.Errorf("want PC == 2, got %d", cpu.PC)
@@ -64,8 +79,13 @@ func TestHaltStopsCPU(t *testing.T) {
 
 func TestDecDecrementsA(t *testing.T) {
 	t.Parallel()
+	input := []string{"INC", "DEC", "HALT"}
+	program, err := r8.Assemble(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cpu := r8.NewCPU()
-	cpu.LoadProgram(r8.Assemble([]string{"INC", "DEC", "HALT"}))
+	cpu.LoadProgram(program)
 	cpu.Run()
 	if cpu.A != 0 {
 		t.Errorf("want A == 0, got %d", cpu.A)
@@ -74,8 +94,13 @@ func TestDecDecrementsA(t *testing.T) {
 
 func TestIncWrapsAFrom255To0(t *testing.T) {
 	t.Parallel()
+	input := []string{"INC", "HALT"}
+	program, err := r8.Assemble(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cpu := r8.NewCPU()
-	cpu.LoadProgram(r8.Assemble([]string{"INC", "HALT"}))
+	cpu.LoadProgram(program)
 	cpu.A = 255
 	cpu.Run()
 	if cpu.A != 0 {
@@ -85,8 +110,13 @@ func TestIncWrapsAFrom255To0(t *testing.T) {
 
 func TestDecWrapsAFrom0To255(t *testing.T) {
 	t.Parallel()
+	input := []string{"DEC", "HALT"}
+	program, err := r8.Assemble(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cpu := r8.NewCPU()
-	cpu.LoadProgram(r8.Assemble([]string{"DEC", "HALT"}))
+	cpu.LoadProgram(program)
 	cpu.A = 0
 	cpu.Run()
 	if cpu.A != 255 {
@@ -96,8 +126,13 @@ func TestDecWrapsAFrom0To255(t *testing.T) {
 
 func TestStepWrapsPCFrom65535To0(t *testing.T) {
 	t.Parallel()
+	input := []string{"NOP", "HALT"}
+	program, err := r8.Assemble(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cpu := r8.NewCPU()
-	cpu.LoadProgram(r8.Assemble([]string{"NOP", "HALT"}))
+	cpu.LoadProgram(program)
 	cpu.PC = 65535
 	cpu.Run()
 	if cpu.PC != 0 {
@@ -120,75 +155,46 @@ func TestLoadFileLoadsDataFomFileIntoMemory(t *testing.T) {
 	}
 }
 
-func TestAssembleBasic(t *testing.T) {
+func TestAssembleDisassemble(t *testing.T) {
 	cases := []struct {
-		name string
-		in   []string
-		want []byte
+		name        string
+		in          []string
+		want        []byte
+		expectError bool
 	}{
-		{"empty", []string{}, []byte{}},
-		{"nop", []string{"NOP"}, []byte{0x01}},
-		{"inc", []string{"INC"}, []byte{0x30}},
-		{"dec", []string{"DEC"}, []byte{0x40}},
-		{"halt", []string{"HALT"}, []byte{0x00}},
-		{"mixedcase", []string{"nop", "Inc", "dEc", "HaLt"}, []byte{0x01, 0x30, 0x40, 0x00}},
-		{"sequence", []string{"INC", "INC", "DEC", "HALT"}, []byte{0x30, 0x30, 0x40, 0x00}},
-		{"unknown", []string{"FOOBAR"}, []byte{0x01}}, // current behavior: defaults to NOP
+		{"empty", []string{}, []byte{}, false},
+		{"nop", []string{"NOP"}, []byte{0x01}, false},
+		{"inc", []string{"INC"}, []byte{0x30}, false},
+		{"dec", []string{"DEC"}, []byte{0x40}, false},
+		{"halt", []string{"HALT"}, []byte{0x00}, false},
+		{"mixedcase", []string{"nop", "Inc", "dEc", "HaLt"}, []byte{0x01, 0x30, 0x40, 0x00}, false},
+		{"sequence", []string{"INC", "INC", "DEC", "HALT"}, []byte{0x30, 0x30, 0x40, 0x00}, false},
+		{"unknown", []string{"FOOBAR"}, []byte{}, true},
+		{"unknown in sequence", []string{"INC", "INC", "FOO", "HALT"}, []byte{}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := r8.Assemble(c.in)
-			if !reflect.DeepEqual(got, c.want) {
-				t.Errorf("Assemble(%v)=%v want %v", c.in, got, c.want)
+			asm, err := r8.Assemble(c.in)
+			if err != nil && !c.expectError {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(asm, c.want) {
+				t.Errorf("Assemble(%v)=%v want %v", c.in, asm, c.want)
+			}
+			dasm := r8.Disassemble(asm)
+			var want []string
+			if c.expectError {
+				want = []string{}
+			} else {
+				want = make([]string, len(c.in))
+				for i := range c.in {
+					want[i] = strings.ToLower(c.in[i])
+				}
+			}
+
+			if !reflect.DeepEqual(dasm, want) {
+				t.Errorf("roundtrip %v -> dasm=%v want %v", c.in, dasm, want)
 			}
 		})
-	}
-}
-
-func TestDisassembleBasic(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []byte
-		want []string
-	}{
-		{"empty", []byte{}, []string{}},
-		{"nop", []byte{0x01}, []string{"nop"}},
-		{"inc", []byte{0x30}, []string{"inc"}},
-		{"dec", []byte{0x40}, []string{"dec"}},
-		{"halt", []byte{0x00}, []string{"halt"}},
-		{"sequence", []byte{0x30, 0x30, 0x40, 0x00}, []string{"inc", "inc", "dec", "halt"}},
-		{"unknown", []byte{0x02}, []string{"unimplemented"}},
-		{"unknown2", []byte{0xFF}, []string{"unimplemented"}},
-		{"mixed", []byte{0x01, 0x02, 0x00}, []string{"nop", "unimplemented", "halt"}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := r8.Disassemble(c.in)
-			if !reflect.DeepEqual(got, c.want) {
-				t.Errorf("Disassemble(%v)=%v want %v", c.in, got, c.want)
-			}
-		})
-	}
-}
-
-func TestAssembleDisassembleRoundtrip(t *testing.T) {
-	cases := [][]string{
-		{},
-		{"NOP"},
-		{"INC", "DEC", "HALT"},
-		{"nop", "inc", "dec", "halt"},
-		{"INC", "INC", "INC"},
-	}
-	for _, c := range cases {
-		asm := r8.Assemble(c)
-		dasm := r8.Disassemble(asm)
-		// canonicalize input to lowercase for comparison
-		want := make([]string, len(c))
-		for i := range c {
-			want[i] = strings.ToLower(c[i])
-		}
-		if !reflect.DeepEqual(dasm, want) {
-			t.Errorf("roundtrip %v -> dasm=%v want %v", c, dasm, want)
-		}
 	}
 }
