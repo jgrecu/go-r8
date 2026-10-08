@@ -19,22 +19,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	lines := processData(data)
-	program := r8.Assemble(lines)
+	lines := strings.Fields(string(data))
+	program, err := r8.Assemble(lines)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("source file error: %w", err))
+		os.Exit(1)
+	}
 
 	err = os.WriteFile("program.bin", program, 0o644)
 	if err != nil {
 		fmt.Println(err)
 	}
-}
-
-func processData(data []byte) []string {
-	if len(data) == 0 {
-		return []string{}
-	}
-
-	content := strings.ReplaceAll(string(data), "\r\n", "\n")
-	content = strings.Trim(content, "\n")
-	lines := strings.Split(content, "\n")
-	return lines
 }
