@@ -17,7 +17,7 @@ func main() {
 	cpu.LoadFile(os.Args[1])
 	scan := bufio.NewScanner(os.Stdin)
 
-	fmt.Println("Next OP       PC > A")
+	fmt.Println("Next Oper      PC   > A")
 	fmt.Print(cpu)
 	for scan.Scan() {
 		cpu.Step()
