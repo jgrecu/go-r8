@@ -5,13 +5,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jgrecu/go-r8"
+	r8 "github.com/jgrecu/go-r8"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("you need the file name as first paramater")
-		return
+		fmt.Fprintln(os.Stderr, "you need the file name as first parameter")
+		os.Exit(2)
 	}
 	data, err := os.ReadFile(os.Args[1])
 	if err != nil {
@@ -28,6 +28,7 @@ func main() {
 
 	err = os.WriteFile("program.bin", program, 0o644)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }

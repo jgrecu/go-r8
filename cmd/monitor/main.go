@@ -10,24 +10,27 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("you need the file name as first paramater")
-		return
+		fmt.Fprintln(os.Stderr, "you need the file name as first parameter")
+		os.Exit(2)
 	}
 	cpu := r8.NewCPU()
-	cpu.LoadFile(os.Args[1])
+	if err := cpu.LoadFile(os.Args[1]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	scan := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("Next Oper      PC   > A")
 	fmt.Print(cpu)
 	for scan.Scan() {
-		cpu.Step()
+		if !cpu.Step() {
+			break
+		}
 		fmt.Print(cpu)
-		if scan.Err() != nil {
-			break
-		}
-		if cpu.Mem[cpu.PC] == 0 {
-			break
-		}
+	}
+	if err := scan.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	fmt.Println()
 }
