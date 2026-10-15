@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	r8 "github.com/jgrecu/go-r8"
 )
@@ -20,7 +19,9 @@ func main() {
 	}
 
 	lines := r8.Disassemble(data)
-	srcData := []byte(strings.Join(lines, "\n") + "\n")
+	srcData := []byte(lines)
+
+	fmt.Println(string(srcData))
 
 	err = os.WriteFile("program.src", srcData, 0o644)
 	if err != nil {
