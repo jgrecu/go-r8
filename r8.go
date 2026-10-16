@@ -37,7 +37,8 @@ const (
 	OpDec  byte = 0x40 // decrement A
 	OpLd   byte = 0x10 // load the following byte into A
 	OpJmp  byte = 0xF7 // jump to the following 16-bit little-endian address
-	OpBra  byte = 0xF0 // branch by the following signed byte, relative to the next instruction
+	OpBra  byte = 0xF0 // branch forward by the following byte, relative to the next instruction
+	OpBeq  byte = 0xF1 // branch forward by the following byte if A is zero
 )
 
 // MemSize is the size of the CPU's memory in bytes.
@@ -77,7 +78,21 @@ var instructions = map[byte]instruction{
 		return true
 	}},
 	OpBra: {"bra", 1, func(cpu *CPU) bool {
-		cpu.PC += uint16(cpu.Mem[cpu.PC]) + 1
+		// reads the offset operand at PC and, if taken,
+		// moves PC forward by that many bytes past the operand
+		offset := cpu.Mem[cpu.PC]
+		cpu.PC++
+		cpu.PC += uint16(offset)
+		return true
+	}},
+	OpBeq: {"beq", 1, func(cpu *CPU) bool {
+		// reads the offset operand at PC and, if taken,
+		// moves PC forward by that many bytes past the operand
+		offset := cpu.Mem[cpu.PC]
+		cpu.PC++
+		if cpu.A == 0 {
+			cpu.PC += uint16(offset)
+		}
 		return true
 	}},
 }
@@ -147,7 +162,7 @@ func (cpu *CPU) readUint16(addr uint16) uint16 {
 // String returns a one-line view of the next instruction, PC, and A, as
 // shown by the monitor.
 func (cpu *CPU) String() string {
-	return fmt.Sprintf("next %-6q => %04d > %07d", strings.ToUpper(disassembleOp(*cpu)), cpu.PC, cpu.A)
+	return fmt.Sprintf("next %-12q => %04d > %07d", strings.ToUpper(disassembleOp(*cpu)), cpu.PC, cpu.A)
 }
 
 // disassembleOp returns the source form of the instruction at cpu.PC, such
