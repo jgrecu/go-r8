@@ -95,6 +95,10 @@ func TestCpuRun(t *testing.T) {
 		{"beq not taken when A is nonzero", []string{"LD", "5", "BEQ", "1", "INC", "HALT"}, 0, 0, 6, 6},
 		{"beq taken after dec reaches zero", []string{"LD", "1", "DEC", "BEQ", "1", "INC", "HALT"}, 0, 0, 0, 7},
 		{"beq 0 falls through", []string{"BEQ", "0", "INC", "HALT"}, 0, 0, 1, 4},
+		{"bne taken when A is nonzero", []string{"LD", "5", "BNE", "1", "INC", "HALT"}, 0, 0, 5, 6},
+		{"bne not taken when A is zero", []string{"BNE", "1", "INC", "HALT"}, 0, 0, 1, 4},
+		{"bne not taken after dec reaches zero", []string{"LD", "1", "DEC", "BNE", "1", "INC", "HALT"}, 0, 0, 1, 7},
+		{"bne 0 falls through", []string{"LD", "5", "BNE", "0", "INC", "HALT"}, 0, 0, 6, 6},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -161,54 +165,28 @@ func TestLoadProgramTooLarge(t *testing.T) {
 	}
 }
 
-func TestDisassembleUnknownOpcode(t *testing.T) {
+func TestDisassembleInvalidInput(t *testing.T) {
 	t.Parallel()
-	data := []byte{0xFF, 0x01} // 0xFF = unknown, 0x01 = NOP
-	dasm := r8.Disassemble(data)
-	want := "???\nnop"
-	if dasm != want {
-		t.Errorf("Disassemble(%v) = %q, want %q", data, dasm, want)
+	cases := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"unknown opcode", []byte{0xFF, r8.OpNop}, "???\nnop"},
+		{"ld missing operand", []byte{r8.OpLd}, "ld\n???"},
+		{"jmp missing operand byte", []byte{r8.OpJmp, 0x02}, "jmp\n???"},
+		{"bra missing operand", []byte{r8.OpBra}, "bra\n???"},
+		{"beq missing operand", []byte{r8.OpBeq}, "beq\n???"},
+		{"bne missing operand", []byte{r8.OpBne}, "bne\n???"},
 	}
-}
-
-func TestDisassembleTruncated(t *testing.T) {
-	t.Parallel()
-	// LD (0x10) expects 1 operand, but none provided
-	data := []byte{0x10}
-	dasm := r8.Disassemble(data)
-	want := "ld\n???" // mnemonic + truncation marker
-	if dasm != want {
-		t.Errorf("Disassemble(%v) = %q, want %q", data, dasm, want)
-	}
-}
-
-func TestDisassembleTruncatedJmp(t *testing.T) {
-	t.Parallel()
-	data := []byte{0xF7, 0x02} // JMP needs 2 operand bytes, only 1 present
-	dasm := r8.Disassemble(data)
-	want := "jmp\n???"
-	if dasm != want {
-		t.Errorf("Disassemble(%v) = %q, want %q", data, dasm, want)
-	}
-}
-
-func TestDisassembleTruncatedBra(t *testing.T) {
-	t.Parallel()
-	data := []byte{0xF0} // BRA needs 1 operand byte, none present
-	dasm := r8.Disassemble(data)
-	want := "bra\n???"
-	if dasm != want {
-		t.Errorf("Disassemble(%v) = %q, want %q", data, dasm, want)
-	}
-}
-
-func TestDisassembleTruncatedBeq(t *testing.T) {
-	t.Parallel()
-	data := []byte{0xF1} // BEQ needs 1 operand byte, none present
-	dasm := r8.Disassemble(data)
-	want := "beq\n???"
-	if dasm != want {
-		t.Errorf("Disassemble(%v) = %q, want %q", data, dasm, want)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dasm := r8.Disassemble(c.data)
+			if dasm != c.want {
+				t.Errorf("Disassemble(%v) = %q, want %q", c.data, dasm, c.want)
+			}
+		})
 	}
 }
 
@@ -225,45 +203,25 @@ func TestJmpOperandWrapsAroundMemory(t *testing.T) {
 	}
 }
 
-func TestBraWrapsAroundMemory(t *testing.T) {
+func TestBranchWrapsAroundMemory(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name   string
-		pc     uint16
-		offset byte
-		wantPC uint16
-	}{
-		{"operand read after PC wraps", 0xFFFF, 1, 2},
-		{"target past end of memory", 0xFFF0, 0x20, 0x0012},
-		{"max offset", 0xFFFE, 0xFF, 0x00FF},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			cpu := r8.NewCPU()
-			cpu.PC = c.pc
-			cpu.Mem[c.pc] = r8.OpBra
-			cpu.Mem[c.pc+1] = c.offset
-			cpu.Step()
-			if cpu.PC != c.wantPC {
-				t.Errorf("want PC == %#04x, got %#04x", c.wantPC, cpu.PC)
-			}
-		})
-	}
-}
-
-func TestBeqWrapsAroundMemory(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		pc     uint16
-		offset byte
+		op     byte
 		a      byte
+		pc     uint16
+		offset byte
 		wantPC uint16
 	}{
-		{"taken, operand read after PC wraps", 0xFFFF, 1, 0, 2},
-		{"not taken, PC moves past wrapped operand", 0xFFFF, 1, 1, 1},
-		{"taken, target past end of memory", 0xFFF0, 0x20, 0, 0x0012},
+		{"bra operand read after PC wraps", r8.OpBra, 0, 0xFFFF, 1, 2},
+		{"bra target past end of memory", r8.OpBra, 0, 0xFFF0, 0x20, 0x0012},
+		{"bra max offset", r8.OpBra, 0, 0xFFFE, 0xFF, 0x00FF},
+		{"beq taken, operand read after PC wraps", r8.OpBeq, 0, 0xFFFF, 1, 2},
+		{"beq not taken, PC moves past wrapped operand", r8.OpBeq, 1, 0xFFFF, 1, 1},
+		{"beq taken, target past end of memory", r8.OpBeq, 0, 0xFFF0, 0x20, 0x0012},
+		{"bne taken, operand read after PC wraps", r8.OpBne, 1, 0xFFFF, 1, 2},
+		{"bne not taken, PC moves past wrapped operand", r8.OpBne, 0, 0xFFFF, 1, 1},
+		{"bne taken, target past end of memory", r8.OpBne, 1, 0xFFF0, 0x20, 0x0012},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -271,7 +229,7 @@ func TestBeqWrapsAroundMemory(t *testing.T) {
 			cpu := r8.NewCPU()
 			cpu.PC = c.pc
 			cpu.A = c.a
-			cpu.Mem[c.pc] = r8.OpBeq
+			cpu.Mem[c.pc] = c.op
 			cpu.Mem[c.pc+1] = c.offset
 			cpu.Step()
 			if cpu.PC != c.wantPC {
@@ -313,6 +271,8 @@ func TestAssembleErrors(t *testing.T) {
 		{"bra invalid operand", []string{"BRA", "x"}, r8.ErrBadOperand},
 		{"beq missing operand", []string{"BEQ"}, r8.ErrMissingOperand},
 		{"beq operand out of range", []string{"BEQ", "256"}, r8.ErrBadOperand},
+		{"bne missing operand", []string{"BNE"}, r8.ErrMissingOperand},
+		{"bne operand out of range", []string{"BNE", "256"}, r8.ErrBadOperand},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -353,6 +313,8 @@ func TestAssembleDisassemble(t *testing.T) {
 		{"bra in sequence", []string{"BRA", "1", "INC", "HALT"}, []byte{0xF0, 0x01, 0x30, 0x00}, "bra 1\ninc\nhalt", false},
 		{"beq 3", []string{"BEQ", "3"}, []byte{0xF1, 0x03}, "beq 3", false},
 		{"beq in sequence", []string{"LD", "0", "BEQ", "1", "INC", "HALT"}, []byte{0x10, 0x00, 0xF1, 0x01, 0x30, 0x00}, "ld 0\nbeq 1\ninc\nhalt", false},
+		{"bne 3", []string{"BNE", "3"}, []byte{0xF2, 0x03}, "bne 3", false},
+		{"bne in sequence", []string{"LD", "5", "BNE", "1", "INC", "HALT"}, []byte{0x10, 0x05, 0xF2, 0x01, 0x30, 0x00}, "ld 5\nbne 1\ninc\nhalt", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

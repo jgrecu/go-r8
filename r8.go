@@ -39,6 +39,7 @@ const (
 	OpJmp  byte = 0xF7 // jump to the following 16-bit little-endian address
 	OpBra  byte = 0xF0 // branch forward by the following byte, relative to the next instruction
 	OpBeq  byte = 0xF1 // branch forward by the following byte if A is zero
+	OpBne  byte = 0xF2 // branch forward by the following byte if A is not zero
 )
 
 // MemSize is the size of the CPU's memory in bytes.
@@ -78,21 +79,15 @@ var instructions = map[byte]instruction{
 		return true
 	}},
 	OpBra: {"bra", 1, func(cpu *CPU) bool {
-		// reads the offset operand at PC and, if taken,
-		// moves PC forward by that many bytes past the operand
-		offset := cpu.Mem[cpu.PC]
-		cpu.PC++
-		cpu.PC += uint16(offset)
+		cpu.branch(true)
 		return true
 	}},
 	OpBeq: {"beq", 1, func(cpu *CPU) bool {
-		// reads the offset operand at PC and, if taken,
-		// moves PC forward by that many bytes past the operand
-		offset := cpu.Mem[cpu.PC]
-		cpu.PC++
-		if cpu.A == 0 {
-			cpu.PC += uint16(offset)
-		}
+		cpu.branch(cpu.A == 0)
+		return true
+	}},
+	OpBne: {"bne", 1, func(cpu *CPU) bool {
+		cpu.branch(cpu.A != 0)
 		return true
 	}},
 }
@@ -104,6 +99,16 @@ var opcodes = func() map[string]byte {
 	}
 	return m
 }()
+
+// branch moves PC past the offset operand and then, if taken, forward by
+// that many bytes.
+func (cpu *CPU) branch(taken bool) {
+	offset := cpu.Mem[cpu.PC]
+	cpu.PC++
+	if taken {
+		cpu.PC += uint16(offset)
+	}
+}
 
 // NewCPU returns a CPU in its initial state.
 func NewCPU() *CPU {
