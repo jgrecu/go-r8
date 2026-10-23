@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -45,7 +44,7 @@ const (
 // MemSize is the size of the CPU's memory in bytes.
 const MemSize = 65536
 
-// Errors returned by LoadProgram, LoadFile, and Assemble. Use errors.Is to
+// Errors returned by LoadProgram and Assemble. Use errors.Is to
 // check for them, since they are usually wrapped with more context.
 var (
 	ErrProgramTooLarge    = errors.New("program does not fit into memory")
@@ -131,19 +130,6 @@ func (cpu *CPU) Step() bool {
 func (cpu *CPU) Run() {
 	for cpu.Step() {
 	}
-}
-
-// LoadFile reads the program in the file at path and loads it into memory
-// starting at address 0.
-func (cpu *CPU) LoadFile(path string) error {
-	program, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := cpu.LoadProgram(program); err != nil {
-		return fmt.Errorf("load %s: %w", path, err)
-	}
-	return nil
 }
 
 // LoadProgram copies program into memory starting at address 0. It returns
