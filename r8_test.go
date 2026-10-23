@@ -16,7 +16,7 @@ func newTestCPU(t testing.TB, tokens ...string) *r8.CPU {
 		t.Fatal(err)
 	}
 	cpu := r8.NewCPU()
-	if err := cpu.LoadProgram(program); err != nil {
+	if err := cpu.LoadProgram(program, 0); err != nil {
 		t.Fatal(err)
 	}
 	return cpu
@@ -28,13 +28,16 @@ func TestNewInitialisesCPU(t *testing.T) {
 	if cpu.PC != 0 {
 		t.Errorf("after New, want pc == 0, got %d", cpu.PC)
 	}
-	got := cpu.Mem[0]
+	got := cpu.Memory[0]
 	if got != 0 {
 		t.Errorf("after New, want Memory[0] == 0, got %d", got)
 	}
 
 	if cpu.A != 0 {
 		t.Errorf("after New, want a == 0, got %d", cpu.A)
+	}
+	if cpu.Halted {
+		t.Error("after New, want Halted == false, got true")
 	}
 }
 
@@ -51,16 +54,60 @@ func TestStepIncrementsPC(t *testing.T) {
 	}
 }
 
-func TestStepReturnsFalseOnUnknownOpcode(t *testing.T) {
+func TestStepReturnsIllegalInstructionErrorOnUnknownOpcode(t *testing.T) {
 	t.Parallel()
 	cpu := r8.NewCPU()
-	cpu.Mem[0] = 0xFF // not in instructions table
+	cpu.Memory[0] = 0xFF // not in instructions table
 
-	if cpu.Step() {
-		t.Errorf("Step() on unknown opcode should return false, got true")
+	err := cpu.Step()
+	var illegal *r8.IllegalInstructionError
+	if !errors.As(err, &illegal) {
+		t.Fatalf("want *IllegalInstructionError, got %v", err)
+	}
+	if illegal.Opcode != 0xFF {
+		t.Errorf("want Opcode == 0xFF, got %#02x", illegal.Opcode)
 	}
 	if cpu.PC != 1 {
 		t.Errorf("PC should be 1, got %d", cpu.PC)
+	}
+	if cpu.Halted {
+		t.Error("want Halted == false after illegal instruction, got true")
+	}
+}
+
+func TestStepSetsHaltedOnHalt(t *testing.T) {
+	t.Parallel()
+	cpu := newTestCPU(t, "HALT")
+	if err := cpu.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if !cpu.Halted {
+		t.Error("want Halted == true after HALT, got false")
+	}
+}
+
+func TestStepDoesNothingWhenHalted(t *testing.T) {
+	t.Parallel()
+	cpu := newTestCPU(t, "INC")
+	cpu.Halted = true
+	if err := cpu.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if cpu.PC != 0 {
+		t.Errorf("want PC == 0, got %d", cpu.PC)
+	}
+	if cpu.A != 0 {
+		t.Errorf("want A == 0, got %d", cpu.A)
+	}
+}
+
+func TestRunReturnsErrorOnIllegalInstruction(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Memory[0] = 0xFF
+	err := cpu.Run()
+	if _, ok := errors.AsType[*r8.IllegalInstructionError](err); !ok {
+		t.Fatalf("want *IllegalInstructionError, got %v", err)
 	}
 }
 
@@ -103,7 +150,12 @@ func TestCpuRun(t *testing.T) {
 			cpu := newTestCPU(t, c.tokens...)
 			cpu.A = c.initA
 			cpu.PC = c.initPC
-			cpu.Run()
+			if err := cpu.Run(); err != nil {
+				t.Fatal(err)
+			}
+			if !cpu.Halted {
+				t.Error("want Halted == true after Run, got false")
+			}
 			if cpu.A != c.wantA {
 				t.Errorf("want A == %d, got %d", c.wantA, cpu.A)
 			}
@@ -116,10 +168,61 @@ func TestCpuRun(t *testing.T) {
 
 func TestLoadProgramTooLarge(t *testing.T) {
 	t.Parallel()
+	cases := []struct {
+		name string
+		size int
+		addr uint16
+	}{
+		{"larger than memory at 0", r8.MemSize + 1, 0},
+		{"one byte past end of memory", 2, 0xFFFF},
+		{"past end of memory at offset", 0x11, 0xFFF0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cpu := r8.NewCPU()
+			err := cpu.LoadProgram(make([]byte, c.size), c.addr)
+			if !errors.Is(err, r8.ErrProgramTooLarge) {
+				t.Errorf("want ErrProgramTooLarge, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadProgramFillsMemoryExactly(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		size int
+		addr uint16
+	}{
+		{"whole memory at 0", r8.MemSize, 0},
+		{"last byte of memory", 1, 0xFFFF},
+		{"up to end of memory at offset", 0x10, 0xFFF0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cpu := r8.NewCPU()
+			if err := cpu.LoadProgram(make([]byte, c.size), c.addr); err != nil {
+				t.Errorf("want nil error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadProgramAtAddress(t *testing.T) {
+	t.Parallel()
 	cpu := r8.NewCPU()
-	err := cpu.LoadProgram(make([]byte, r8.MemSize+1))
-	if !errors.Is(err, r8.ErrProgramTooLarge) {
-		t.Errorf("want ErrProgramTooLarge, got %v", err)
+	program := []byte{r8.OpLd, 7, r8.OpHalt}
+	if err := cpu.LoadProgram(program, 0x0100); err != nil {
+		t.Fatal(err)
+	}
+	if got := cpu.Memory[0x0100 : 0x0100+len(program)]; !bytes.Equal(got, program) {
+		t.Errorf("want Memory[0x0100:] == %v, got %v", program, got)
+	}
+	if cpu.Memory[0] != 0 {
+		t.Errorf("want Memory[0] untouched (0), got %#02x", cpu.Memory[0])
 	}
 }
 
@@ -152,9 +255,9 @@ func TestJmpOperandWrapsAroundMemory(t *testing.T) {
 	t.Parallel()
 	cpu := r8.NewCPU()
 	cpu.PC = 0xFFFE
-	cpu.Mem[0xFFFE] = r8.OpJmp
-	cpu.Mem[0xFFFF] = 0x04 // lo
-	cpu.Mem[0x0000] = 0x00 // hi, read after PC wraps
+	cpu.Memory[0xFFFE] = r8.OpJmp
+	cpu.Memory[0xFFFF] = 0x04 // lo
+	cpu.Memory[0x0000] = 0x00 // hi, read after PC wraps
 	cpu.Step()
 	if cpu.PC != 4 {
 		t.Errorf("want PC == 4, got %d", cpu.PC)
@@ -187,8 +290,8 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 			cpu := r8.NewCPU()
 			cpu.PC = c.pc
 			cpu.A = c.a
-			cpu.Mem[c.pc] = c.op
-			cpu.Mem[c.pc+1] = c.offset
+			cpu.Memory[c.pc] = c.op
+			cpu.Memory[c.pc+1] = c.offset
 			cpu.Step()
 			if cpu.PC != c.wantPC {
 				t.Errorf("want PC == %#04x, got %#04x", c.wantPC, cpu.PC)

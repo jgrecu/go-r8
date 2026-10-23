@@ -18,14 +18,16 @@ type CPU struct {
 	PC uint16
 	// A is the accumulator register.
 	A byte
-	// Mem is the CPU's addressable memory.
-	Mem [MemSize]byte
+	// Memory is the 64KB CPU's addressable memory.
+	Memory [MemSize]byte
+	// Halted is true once a HALT instruction has executed.
+	Halted bool
 }
 
 type instruction struct {
 	mnemonic    string
 	operandSize int // width in bytes of the operand after the op code (0, 1 or 2), little-endian
-	exec        func(cpu *CPU) bool
+	handler     func(*CPU) error
 }
 
 // Opcodes of the R8 instruction set.
@@ -53,41 +55,57 @@ var (
 	ErrMissingOperand     = errors.New("missing operand")
 )
 
+// IllegalInstructionError reports an undefined opcode and the address it was
+// fetched from.
+type IllegalInstructionError struct {
+	Opcode byte
+	PC     uint16
+}
+
+func (e *IllegalInstructionError) Error() string {
+	return fmt.Sprintf("illegal instruction: 0x%02X at PC=0x%04X", e.Opcode, e.PC)
+}
+
 var instructions = map[byte]instruction{
-	OpHalt: {"halt", 0, func(cpu *CPU) bool {
-		return false
+	OpHalt: {"halt", 0, func(cpu *CPU) error {
+		cpu.Halted = true
+		cpu.PC += 1
+		return nil
 	}},
-	OpNop: {"nop", 0, func(cpu *CPU) bool {
-		return true
+	OpNop: {"nop", 0, func(cpu *CPU) error {
+		cpu.PC += 1
+		return nil
 	}},
-	OpInc: {"inc", 0, func(cpu *CPU) bool {
+	OpInc: {"inc", 0, func(cpu *CPU) error {
 		cpu.A++
-		return true
+		cpu.PC += 1
+		return nil
 	}},
-	OpDec: {"dec", 0, func(cpu *CPU) bool {
+	OpDec: {"dec", 0, func(cpu *CPU) error {
 		cpu.A--
-		return true
+		cpu.PC += 1
+		return nil
 	}},
-	OpLd: {"ld", 1, func(cpu *CPU) bool {
-		cpu.A = cpu.Mem[cpu.PC]
-		cpu.PC++
-		return true
+	OpLd: {"ld", 1, func(cpu *CPU) error {
+		cpu.A = cpu.Memory[cpu.PC+1]
+		cpu.PC += 2
+		return nil
 	}},
-	OpJmp: {"jmp", 2, func(cpu *CPU) bool {
-		cpu.PC = cpu.readUint16(cpu.PC)
-		return true
+	OpJmp: {"jmp", 2, func(cpu *CPU) error {
+		cpu.PC = cpu.readUint16(cpu.PC + 1)
+		return nil
 	}},
-	OpBra: {"bra", 1, func(cpu *CPU) bool {
+	OpBra: {"bra", 1, func(cpu *CPU) error {
 		cpu.branch(true)
-		return true
+		return nil
 	}},
-	OpBeq: {"beq", 1, func(cpu *CPU) bool {
+	OpBeq: {"beq", 1, func(cpu *CPU) error {
 		cpu.branch(cpu.A == 0)
-		return true
+		return nil
 	}},
-	OpBne: {"bne", 1, func(cpu *CPU) bool {
+	OpBne: {"bne", 1, func(cpu *CPU) error {
 		cpu.branch(cpu.A != 0)
-		return true
+		return nil
 	}},
 }
 
@@ -102,8 +120,8 @@ var opcodes = func() map[string]byte {
 // branch moves PC past the offset operand and then, if taken, forward by
 // that many bytes.
 func (cpu *CPU) branch(taken bool) {
-	offset := cpu.Mem[cpu.PC]
-	cpu.PC++
+	offset := cpu.Memory[cpu.PC+1]
+	cpu.PC += 2
 	if taken {
 		cpu.PC += uint16(offset)
 	}
@@ -111,42 +129,63 @@ func (cpu *CPU) branch(taken bool) {
 
 // NewCPU returns a CPU in its initial state.
 func NewCPU() *CPU {
-	return &CPU{}
+	return &CPU{
+		A:      0,
+		PC:     0,
+		Memory: [MemSize]byte{},
+		Halted: false,
+	}
 }
 
-// Step executes the instruction at PC and reports whether the CPU should
-// keep running. It returns false on HALT or an unknown opcode.
-func (cpu *CPU) Step() bool {
-	opcode := cpu.Mem[cpu.PC]
-	cpu.PC++
+// Step executes the instruction at PC. It does nothing once the CPU is
+// halted. On an unknown opcode it moves PC past it and returns an
+// *IllegalInstructionError.
+func (cpu *CPU) Step() error {
+	if cpu.Halted {
+		return nil // Already halted, nothing to do
+	}
+
+	opcode := cpu.Memory[cpu.PC]
 	inst, ok := instructions[opcode]
 	if !ok {
-		return false
+		err := &IllegalInstructionError{
+			Opcode: opcode,
+			PC:     cpu.PC,
+		}
+		cpu.PC++
+		return err
 	}
-	return inst.exec(cpu)
+	return inst.handler(cpu)
 }
 
-// Run executes instructions until Step returns false.
-func (cpu *CPU) Run() {
-	for cpu.Step() {
+// Run executes instructions until the CPU halts or Step returns an error.
+func (cpu *CPU) Run() error {
+	for !cpu.Halted {
+		if err := cpu.Step(); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-// LoadProgram copies program into memory starting at address 0. It returns
-// ErrProgramTooLarge if program is larger than MemSize.
-func (cpu *CPU) LoadProgram(program []byte) error {
-	if len(program) > MemSize {
-		return fmt.Errorf("%w: %d bytes, max %d", ErrProgramTooLarge, len(program), MemSize)
+// LoadProgram copies program into memory starting at addr. It returns
+// ErrProgramTooLarge if program does not fit between addr and the end of
+// memory.
+func (cpu *CPU) LoadProgram(program []byte, addr uint16) error {
+	availableSpace := MemSize - int(addr)
+	if len(program) > availableSpace {
+		return fmt.Errorf("%w: %d bytes at 0x%04X exceeds memory (available: %d bytes)",
+			ErrProgramTooLarge, len(program), addr, availableSpace)
 	}
-	copy(cpu.Mem[0:], program)
+	copy(cpu.Memory[addr:], program)
 	return nil
 }
 
 // readUint16 returns the little-endian 16-bit value at addr.
 // The high byte address wraps at 0xFFFF like real 16-bit hardware.
 func (cpu *CPU) readUint16(addr uint16) uint16 {
-	lo := cpu.Mem[addr]
-	hi := cpu.Mem[addr+1]
+	lo := cpu.Memory[addr]
+	hi := cpu.Memory[addr+1]
 	return uint16(hi)<<8 | uint16(lo)
 }
 
@@ -160,7 +199,7 @@ func (cpu *CPU) String() string {
 // as "ld 5" or "halt", for the monitor's status line. It returns "???" if the
 // opcode is unknown.
 func disassembleOp(cpu CPU) string {
-	b := cpu.Mem[cpu.PC]
+	b := cpu.Memory[cpu.PC]
 	inst, ok := instructions[b]
 	if !ok {
 		return "???"
@@ -169,7 +208,7 @@ func disassembleOp(cpu CPU) string {
 	if inst.operandSize == 0 {
 		return inst.mnemonic
 	}
-	return Disassemble(cpu.Mem[cpu.PC : cpu.PC+uint16(inst.operandSize+1)])
+	return Disassemble(cpu.Memory[cpu.PC : cpu.PC+uint16(inst.operandSize+1)])
 }
 
 // Disassemble converts machine code into one line of source per instruction.
