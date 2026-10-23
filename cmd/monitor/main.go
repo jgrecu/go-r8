@@ -14,7 +14,7 @@ func main() {
 		os.Exit(2)
 	}
 	cpu := r8.NewCPU()
-	if err := cpu.LoadFile(os.Args[1]); err != nil {
+	if err := loadFile(cpu, os.Args[1]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -33,4 +33,16 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println()
+}
+
+// loadFile reads the program at path and loads it into cpu's memory.
+func loadFile(cpu *r8.CPU, path string) error {
+	program, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if err := cpu.LoadProgram(program); err != nil {
+		return fmt.Errorf("load %s: %w", path, err)
+	}
+	return nil
 }

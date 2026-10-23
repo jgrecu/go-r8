@@ -3,9 +3,6 @@ package r8_test
 import (
 	"bytes"
 	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/jgrecu/go-r8"
@@ -114,45 +111,6 @@ func TestCpuRun(t *testing.T) {
 				t.Errorf("want PC == %d, got %d", c.wantPC, cpu.PC)
 			}
 		})
-	}
-}
-
-func TestLoadFileLoadsDataFromFileIntoMemory(t *testing.T) {
-	t.Parallel()
-	want := []byte{0x30, 0x30, 0x00}
-	path := filepath.Join(t.TempDir(), "input.bin")
-	if err := os.WriteFile(path, want, 0o644); err != nil {
-		t.Fatalf("failed setting up test file: %v", err)
-	}
-	cpu := r8.NewCPU()
-	if err := cpu.LoadFile(path); err != nil {
-		t.Fatal(err)
-	}
-	got := cpu.Mem[0:len(want)]
-	if !bytes.Equal(got, want) {
-		t.Errorf("want %+v, got %+v", want, got)
-	}
-}
-
-func TestLoadFileNotFound(t *testing.T) {
-	t.Parallel()
-	cpu := r8.NewCPU()
-	err := cpu.LoadFile(filepath.Join(t.TempDir(), "missing.bin"))
-	if !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("want fs.ErrNotExist, got %v", err)
-	}
-}
-
-func TestLoadFileProgramTooLarge(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "large.bin")
-	if err := os.WriteFile(path, make([]byte, r8.MemSize+1), 0o644); err != nil {
-		t.Fatalf("failed setting up test file: %v", err)
-	}
-	cpu := r8.NewCPU()
-	err := cpu.LoadFile(path)
-	if !errors.Is(err, r8.ErrProgramTooLarge) {
-		t.Errorf("want ErrProgramTooLarge, got %v", err)
 	}
 }
 
