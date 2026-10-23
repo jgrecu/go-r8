@@ -168,9 +168,9 @@ func (cpu *CPU) Run() error {
 	return nil
 }
 
-// LoadProgram copies program into memory starting at addr. It returns
-// ErrProgramTooLarge if program does not fit between addr and the end of
-// memory.
+// LoadProgram copies program into memory starting at addr and sets PC to
+// addr. It returns ErrProgramTooLarge, leaving the CPU unchanged, if program
+// does not fit between addr and the end of memory.
 func (cpu *CPU) LoadProgram(program []byte, addr uint16) error {
 	availableSpace := MemSize - int(addr)
 	if len(program) > availableSpace {
@@ -178,6 +178,7 @@ func (cpu *CPU) LoadProgram(program []byte, addr uint16) error {
 			ErrProgramTooLarge, len(program), addr, availableSpace)
 	}
 	copy(cpu.Memory[addr:], program)
+	cpu.PC = addr
 	return nil
 }
 
