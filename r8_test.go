@@ -143,6 +143,8 @@ func TestCpuRun(t *testing.T) {
 		{"bne not taken when A is zero", []string{"BNE", "1", "INC", "HALT"}, 0, 0, 1, 4},
 		{"bne not taken after dec reaches zero", []string{"LD", "1", "DEC", "BNE", "1", "INC", "HALT"}, 0, 0, 1, 7},
 		{"bne 0 falls through", []string{"LD", "5", "BNE", "0", "INC", "HALT"}, 0, 0, 6, 6},
+		{"bne backward loops until A is zero", []string{"LD", "3", "DEC", "BNE", "-3", "HALT"}, 0, 0, 0, 6},
+		{"beq backward taken once", []string{"BRA", "1", "HALT", "LD", "0", "BEQ", "-5"}, 0, 0, 0, 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -297,7 +299,11 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 	}{
 		{"bra operand read after PC wraps", r8.OpBra, 0, 0xFFFF, 1, 2},
 		{"bra target past end of memory", r8.OpBra, 0, 0xFFF0, 0x20, 0x0012},
-		{"bra max offset", r8.OpBra, 0, 0xFFFE, 0xFF, 0x00FF},
+		{"bra max forward offset", r8.OpBra, 0, 0xFFFE, 0x7F, 0x007F},
+		{"bra 0x80 is max backward offset", r8.OpBra, 0, 0x0100, 0x80, 0x0082},
+		{"bra target before start of memory", r8.OpBra, 0, 0x0000, 0xFC, 0xFFFE},
+		{"beq taken, target before start of memory", r8.OpBeq, 0, 0x0000, 0xFC, 0xFFFE},
+		{"bne taken, target before start of memory", r8.OpBne, 1, 0x0000, 0xFC, 0xFFFE},
 		{"beq taken, operand read after PC wraps", r8.OpBeq, 0, 0xFFFF, 1, 2},
 		{"beq not taken, PC moves past wrapped operand", r8.OpBeq, 1, 0xFFFF, 1, 1},
 		{"beq taken, target past end of memory", r8.OpBeq, 0, 0xFFF0, 0x20, 0x0012},
@@ -349,12 +355,16 @@ func TestAssembleErrors(t *testing.T) {
 		{"jmp address out of range", []string{"JMP", "65536"}, r8.ErrBadOperand},
 		{"jmp missing operand", []string{"JMP"}, r8.ErrMissingOperand},
 		{"bra missing operand", []string{"BRA"}, r8.ErrMissingOperand},
-		{"bra operand out of range", []string{"BRA", "256"}, r8.ErrBadOperand},
+		{"bra operand above signed range", []string{"BRA", "128"}, r8.ErrBadOperand},
+		{"bra operand below signed range", []string{"BRA", "-129"}, r8.ErrBadOperand},
+		{"bra unsigned hex is out of range", []string{"BRA", "0xFF"}, r8.ErrBadOperand},
+		{"ld rejects negative operand", []string{"LD", "-1"}, r8.ErrBadOperand},
+		{"jmp rejects negative operand", []string{"JMP", "-1"}, r8.ErrBadOperand},
 		{"bra invalid operand", []string{"BRA", "x"}, r8.ErrBadOperand},
 		{"beq missing operand", []string{"BEQ"}, r8.ErrMissingOperand},
-		{"beq operand out of range", []string{"BEQ", "256"}, r8.ErrBadOperand},
+		{"beq operand out of range", []string{"BEQ", "128"}, r8.ErrBadOperand},
 		{"bne missing operand", []string{"BNE"}, r8.ErrMissingOperand},
-		{"bne operand out of range", []string{"BNE", "256"}, r8.ErrBadOperand},
+		{"bne operand out of range", []string{"BNE", "-129"}, r8.ErrBadOperand},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -391,7 +401,12 @@ func TestAssembleDisassemble(t *testing.T) {
 		{"jmp decimal in, hex out", []string{"JMP", "256"}, []byte{0xF7, 0x00, 0x01}, "jmp 0x0100", false},
 		{"bra 3", []string{"BRA", "3"}, []byte{0xF0, 0x03}, "bra 3", false},
 		{"bra 0", []string{"BRA", "0"}, []byte{0xF0, 0x00}, "bra 0", false},
-		{"bra hex in, decimal out", []string{"BRA", "0xFF"}, []byte{0xF0, 0xFF}, "bra 255", false},
+		{"bra hex in, decimal out", []string{"BRA", "0x7F"}, []byte{0xF0, 0x7F}, "bra 127", false},
+		{"bra -1", []string{"BRA", "-1"}, []byte{0xF0, 0xFF}, "bra -1", false},
+		{"bra -128", []string{"BRA", "-128"}, []byte{0xF0, 0x80}, "bra -128", false},
+		{"beq -3", []string{"BEQ", "-3"}, []byte{0xF1, 0xFD}, "beq -3", false},
+		{"bne -3", []string{"BNE", "-3"}, []byte{0xF2, 0xFD}, "bne -3", false},
+		{"bne backward loop", []string{"LD", "3", "DEC", "BNE", "-3", "HALT"}, []byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}, "ld 3\ndec\nbne -3\nhalt", false},
 		{"bra in sequence", []string{"BRA", "1", "INC", "HALT"}, []byte{0xF0, 0x01, 0x30, 0x00}, "bra 1\ninc\nhalt", false},
 		{"beq 3", []string{"BEQ", "3"}, []byte{0xF1, 0x03}, "beq 3", false},
 		{"beq in sequence", []string{"LD", "0", "BEQ", "1", "INC", "HALT"}, []byte{0x10, 0x00, 0xF1, 0x01, 0x30, 0x00}, "ld 0\nbeq 1\ninc\nhalt", false},

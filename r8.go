@@ -26,7 +26,8 @@ type CPU struct {
 
 type instruction struct {
 	mnemonic    string
-	operandSize int // width in bytes of the operand after the op code (0, 1 or 2), little-endian
+	operandSize int  // width in bytes of the operand after the op code (0, 1 or 2), little-endian
+	signed      bool // operand is a two's complement offset rather than an unsigned value
 	handler     func(*CPU) error
 }
 
@@ -38,9 +39,9 @@ const (
 	OpDec  byte = 0x40 // decrement A
 	OpLd   byte = 0x10 // load the following byte into A
 	OpJmp  byte = 0xF7 // jump to the following 16-bit little-endian address
-	OpBra  byte = 0xF0 // branch forward by the following byte, relative to the next instruction
-	OpBeq  byte = 0xF1 // branch forward by the following byte if A is zero
-	OpBne  byte = 0xF2 // branch forward by the following byte if A is not zero
+	OpBra  byte = 0xF0 // branch by the following signed byte, relative to the next instruction
+	OpBeq  byte = 0xF1 // branch by the following signed byte if A is zero
+	OpBne  byte = 0xF2 // branch by the following signed byte if A is not zero
 )
 
 // MemSize is the size of the CPU's memory in bytes.
@@ -67,43 +68,43 @@ func (e *IllegalInstructionError) Error() string {
 }
 
 var instructions = map[byte]instruction{
-	OpHalt: {"halt", 0, func(cpu *CPU) error {
+	OpHalt: {mnemonic: "halt", handler: func(cpu *CPU) error {
 		cpu.Halted = true
 		cpu.PC += 1
 		return nil
 	}},
-	OpNop: {"nop", 0, func(cpu *CPU) error {
+	OpNop: {mnemonic: "nop", handler: func(cpu *CPU) error {
 		cpu.PC += 1
 		return nil
 	}},
-	OpInc: {"inc", 0, func(cpu *CPU) error {
+	OpInc: {mnemonic: "inc", handler: func(cpu *CPU) error {
 		cpu.A++
 		cpu.PC += 1
 		return nil
 	}},
-	OpDec: {"dec", 0, func(cpu *CPU) error {
+	OpDec: {mnemonic: "dec", handler: func(cpu *CPU) error {
 		cpu.A--
 		cpu.PC += 1
 		return nil
 	}},
-	OpLd: {"ld", 1, func(cpu *CPU) error {
+	OpLd: {mnemonic: "ld", operandSize: 1, handler: func(cpu *CPU) error {
 		cpu.A = cpu.Memory[cpu.PC+1]
 		cpu.PC += 2
 		return nil
 	}},
-	OpJmp: {"jmp", 2, func(cpu *CPU) error {
+	OpJmp: {mnemonic: "jmp", operandSize: 2, handler: func(cpu *CPU) error {
 		cpu.PC = cpu.readUint16(cpu.PC + 1)
 		return nil
 	}},
-	OpBra: {"bra", 1, func(cpu *CPU) error {
+	OpBra: {mnemonic: "bra", operandSize: 1, signed: true, handler: func(cpu *CPU) error {
 		cpu.branch(true)
 		return nil
 	}},
-	OpBeq: {"beq", 1, func(cpu *CPU) error {
+	OpBeq: {mnemonic: "beq", operandSize: 1, signed: true, handler: func(cpu *CPU) error {
 		cpu.branch(cpu.A == 0)
 		return nil
 	}},
-	OpBne: {"bne", 1, func(cpu *CPU) error {
+	OpBne: {mnemonic: "bne", operandSize: 1, signed: true, handler: func(cpu *CPU) error {
 		cpu.branch(cpu.A != 0)
 		return nil
 	}},
@@ -117,10 +118,11 @@ var opcodes = func() map[string]byte {
 	return m
 }()
 
-// branch moves PC past the offset operand and then, if taken, forward by
-// that many bytes.
+// branch moves PC past the offset operand and then, if taken, by that
+// signed offset (-128 to 127). The target wraps around memory in either
+// direction.
 func (cpu *CPU) branch(taken bool) {
-	offset := cpu.Memory[cpu.PC+1]
+	offset := int8(cpu.Memory[cpu.PC+1])
 	cpu.PC += 2
 	if taken {
 		cpu.PC += uint16(offset)
@@ -213,8 +215,9 @@ func disassembleOp(cpu CPU) string {
 }
 
 // Disassemble converts machine code into one line of source per instruction.
-// Byte operands are shown in decimal and 16-bit addresses in hex. Unknown
-// opcodes and a final instruction missing its operands are shown as "???".
+// Byte operands are shown in decimal (signed for branch offsets) and 16-bit
+// addresses in hex. Unknown opcodes and a final instruction missing its
+// operands are shown as "???".
 func Disassemble(data []byte) string {
 	lines := make([]string, 0)
 	for i := 0; i < len(data); {
@@ -232,22 +235,26 @@ func Disassemble(data []byte) string {
 			lines = append(lines, inst.mnemonic, "???")
 			break
 		}
-		lines = append(lines, inst.mnemonic+" "+formatOperand(data[i:i+inst.operandSize]))
+		lines = append(lines, inst.mnemonic+" "+formatOperand(data[i:i+inst.operandSize], inst.signed))
 		i += inst.operandSize
 	}
 	return strings.Join(lines, "\n")
 }
 
-func formatOperand(b []byte) string {
+func formatOperand(b []byte, signed bool) string {
 	if len(b) == 2 {
 		return fmt.Sprintf("0x%04X", binary.LittleEndian.Uint16(b))
+	}
+	if signed {
+		return strconv.Itoa(int(int8(b[0])))
 	}
 	return strconv.Itoa(int(b[0]))
 }
 
 // Assemble converts source tokens into machine code. Mnemonics are
 // case-insensitive, and operands may be written in any base accepted by
-// strconv.ParseUint with base 0. Multi-byte operands are stored
+// strconv.ParseUint with base 0. Branch offsets are signed (-128 to 127) and
+// parsed with strconv.ParseInt instead. Multi-byte operands are stored
 // little-endian. Errors wrap ErrUnknownInstruction, ErrBadOperand, or
 // ErrMissingOperand.
 func Assemble(tokens []string) ([]byte, error) {
@@ -260,21 +267,31 @@ func Assemble(tokens []string) ([]byte, error) {
 		}
 		program = append(program, op)
 
-		size := instructions[op].operandSize
-		if size == 0 {
+		inst := instructions[op]
+		if inst.operandSize == 0 {
 			continue
 		}
 		i++
 		if i == len(tokens) {
 			return []byte{}, fmt.Errorf("%s: %w", tok, ErrMissingOperand)
 		}
-		v, err := strconv.ParseUint(tokens[i], 0, 8*size)
+		v, err := parseOperand(tokens[i], inst.operandSize, inst.signed)
 		if err != nil {
 			return []byte{}, fmt.Errorf("%s: %w %q: %w", tok, ErrBadOperand, tokens[i], err)
 		}
-		program = appendOperand(program, v, size)
+		program = appendOperand(program, v, inst.operandSize)
 	}
 	return program, nil
+}
+
+// parseOperand parses s as a size-byte operand and returns its bit pattern.
+// A signed operand is stored in two's complement.
+func parseOperand(s string, size int, signed bool) (uint64, error) {
+	if !signed {
+		return strconv.ParseUint(s, 0, 8*size)
+	}
+	v, err := strconv.ParseInt(s, 0, 8*size)
+	return uint64(v), err
 }
 
 func appendOperand(program []byte, v uint64, size int) []byte {
