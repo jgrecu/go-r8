@@ -226,6 +226,27 @@ func TestLoadProgramAtAddress(t *testing.T) {
 	}
 }
 
+func TestLoadProgramAtAddressRunsFromThatAddress(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	program := []byte{r8.OpLd, 7, r8.OpHalt}
+	if err := cpu.LoadProgram(program, 0x0100); err != nil {
+		t.Fatal(err)
+	}
+	if cpu.PC != 0x0100 {
+		t.Errorf("want PC 0x0100 after load, got %#04x", cpu.PC)
+	}
+	if err := cpu.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if cpu.A != 7 {
+		t.Errorf("want A 7, got %d", cpu.A)
+	}
+	if cpu.PC != 0x0103 {
+		t.Errorf("want PC 0x0103, got %#04x", cpu.PC)
+	}
+}
+
 func TestDisassembleInvalidInput(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
