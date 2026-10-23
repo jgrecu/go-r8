@@ -23,7 +23,11 @@ func main() {
 	fmt.Println("Next Oper            PC   > A")
 	fmt.Print(cpu)
 	for scan.Scan() {
-		if !cpu.Step() {
+		if err := cpu.Step(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if cpu.Halted {
 			break
 		}
 		fmt.Print(cpu)
@@ -41,7 +45,7 @@ func loadFile(cpu *r8.CPU, path string) error {
 	if err != nil {
 		return err
 	}
-	if err := cpu.LoadProgram(program); err != nil {
+	if err := cpu.LoadProgram(program, 0); err != nil {
 		return fmt.Errorf("load %s: %w", path, err)
 	}
 	return nil
