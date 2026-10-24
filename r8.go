@@ -180,12 +180,7 @@ func (cpu *CPU) branchIf(cond bool, offset uint16) {
 
 // NewCPU returns a CPU in its initial state.
 func NewCPU() *CPU {
-	return &CPU{
-		A:      0,
-		PC:     0,
-		Memory: [MemSize]byte{},
-		Halted: false,
-	}
+	return &CPU{}
 }
 
 // Step executes the instruction at PC. It does nothing once the CPU is
@@ -294,7 +289,7 @@ func Assemble(tokens []string) ([]byte, error) {
 		tok := tokens[i]
 		op, ok := opcodes[strings.ToLower(tok)]
 		if !ok {
-			return nil, fmt.Errorf("%w %q", ErrUnknownInstruction, tok)
+			return nil, fmt.Errorf("%w: %q", ErrUnknownInstruction, tok)
 		}
 		program = append(program, op)
 
