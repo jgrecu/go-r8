@@ -28,10 +28,10 @@ func TestRunStepsOncePerInputLineAndShowsFinalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := header + "\n" +
-		`next "LD 7"       => 0000 > 0000000` +
-		`next "INC"        => 0002 > 0000007` +
-		`next "HALT"       => 0003 > 0000008` +
-		`halted            => 0004 > 0000008` + "\n"
+		`next "LD 7"       => 0000000 > 0000` +
+		`next "INC"        => 0000002 > 0007` +
+		`next "HALT"       => 0000003 > 0008` +
+		`halted            => 0000004 > 0008` + "\n"
 	if out.String() != want {
 		t.Errorf("want:\n%s\ngot:\n%s", want, out.String())
 	}
@@ -44,7 +44,7 @@ func TestRunStopsWhenInputEnds(t *testing.T) {
 	if err := run([]string{bin}, strings.NewReader("\n"), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `next "INC"        => 0001 > 0000001`) {
+	if !strings.Contains(out.String(), `next "INC"        => 0000001 > 0001`) {
 		t.Errorf("want state after one step, got:\n%s", out.String())
 	}
 }
