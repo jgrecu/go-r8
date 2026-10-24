@@ -256,15 +256,10 @@ func (cpu *CPU) LoadProgram(program []byte, addr uint16) error {
 	return nil
 }
 
-// String returns a one-line view of the next instruction, PC, and A, as
-// shown by the monitor.
-func (cpu *CPU) String() string {
-	return fmt.Sprintf("next %-12q => %04d > %07d", strings.ToUpper(cpu.disassembleOp()), cpu.PC, cpu.A)
-}
-
-// disassembleOp returns the source form of the instruction at PC, such as
-// "ld 5" or "halt", or "???" if the opcode is unknown.
-func (cpu *CPU) disassembleOp() string {
+// NextInstruction returns the source form of the instruction at PC, such as
+// "ld 5" or "halt", or "???" if the opcode is unknown. Operands that run past
+// the end of memory wrap around, as they do in Step.
+func (cpu *CPU) NextInstruction() string {
 	inst := instructions[cpu.Memory[cpu.PC]]
 	if inst == nil {
 		return "???"
