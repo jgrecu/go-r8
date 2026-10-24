@@ -15,6 +15,19 @@ func ExampleAssemble() {
 	// Output: 10 03 40 F2 FD 00
 }
 
+func ExampleAssemble_labels() {
+	program, err := r8.Assemble(`
+		ld 3
+	loop:	dec
+		bne loop ; assembles to the offset -3
+		halt`)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("% X\n", program)
+	// Output: 10 03 40 F2 FD 00
+}
+
 func ExampleDisassemble() {
 	fmt.Println(r8.Disassemble([]byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}))
 	// Output:

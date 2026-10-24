@@ -3,6 +3,7 @@ package r8_test
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -323,11 +324,12 @@ func TestDisassembleInvalidInput(t *testing.T) {
 		want string
 	}{
 		{"unknown opcode", []byte{0xFF, r8.OpNop}, "???\nnop"},
-		{"ld missing operand", []byte{r8.OpLd}, "ld\n???"},
-		{"jmp missing operand byte", []byte{r8.OpJmp, 0x02}, "jmp\n???"},
-		{"bra missing operand", []byte{r8.OpBra}, "bra\n???"},
-		{"beq missing operand", []byte{r8.OpBeq}, "beq\n???"},
-		{"bne missing operand", []byte{r8.OpBne}, "bne\n???"},
+		{"ld missing operand", []byte{r8.OpLd}, "ld ???"},
+		{"jmp missing operand byte", []byte{r8.OpJmp, 0x02}, "jmp ???"},
+		{"bra missing operand", []byte{r8.OpBra}, "bra ???"},
+		{"beq missing operand", []byte{r8.OpBeq}, "beq ???"},
+		{"bne missing operand", []byte{r8.OpBne}, "bne ???"},
+		{"truncated after valid code", []byte{r8.OpInc, r8.OpLd}, "inc\nld ???"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -514,6 +516,109 @@ func TestAssembleErrorReportsLineNumber(t *testing.T) {
 				t.Errorf("want error starting %q, got %q", c.wantMsg, err)
 			}
 		})
+	}
+}
+
+// nops returns source for n nop instructions, one per line.
+func nops(n int) string {
+	return strings.Repeat("nop\n", n)
+}
+
+func TestAssembleLabels(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want []byte
+	}{
+		{"backward branch", "ld 3\nloop: dec\nbne loop\nhalt", []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt}},
+		{"forward branch", "beq done\ninc\ndone: halt", []byte{r8.OpBeq, 1, r8.OpInc, r8.OpHalt}},
+		{"jmp to absolute address", "jmp start\ninc\nstart: halt", []byte{r8.OpJmp, 0x04, 0x00, r8.OpInc, r8.OpHalt}},
+		{"label on its own line", "loop:\ndec\nbne loop", []byte{r8.OpDec, r8.OpBne, 0xFD}},
+		{"two labels at one address", "a:\nb: inc\nbra a\nbra b", []byte{r8.OpInc, r8.OpBra, 0xFD, r8.OpBra, 0xFB}},
+		{"label at end of program", "bra end\nend:", []byte{r8.OpBra, 0}},
+		{"label named like a mnemonic", "inc: bra inc", []byte{r8.OpBra, 0xFE}},
+		{"numbers still work beside labels", "x: bra -2\njmp x", []byte{r8.OpBra, 0xFE, r8.OpJmp, 0, 0}},
+		{
+			"max forward offset",
+			"bra far\n" + nops(127) + "far: halt",
+			slices.Concat([]byte{r8.OpBra, 0x7F}, bytes.Repeat([]byte{r8.OpNop}, 127), []byte{r8.OpHalt}),
+		},
+		{
+			"max backward offset",
+			"back:\n" + nops(126) + "bra back",
+			slices.Concat(bytes.Repeat([]byte{r8.OpNop}, 126), []byte{r8.OpBra, 0x80}),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := r8.Assemble(c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, c.want) {
+				t.Errorf("Assemble(%q) = % X, want % X", c.src, got, c.want)
+			}
+		})
+	}
+}
+
+func TestAssembleLabelErrors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		src     string
+		wantErr error
+		wantMsg string
+	}{
+		{"undefined label", "nop\nbra nowhere", r8.ErrUndefinedLabel, "line 2:"},
+		{"undefined label is a bad operand", "nop\nbra nowhere", r8.ErrBadOperand, "line 2:"},
+		{"labels are case-sensitive", "Loop: bra loop", r8.ErrUndefinedLabel, "line 1:"},
+		{"duplicate label", "a: nop\na: halt", r8.ErrDuplicateLabel, "line 2:"},
+		{"name starts with digit", "1abc: nop", r8.ErrBadLabel, "line 1:"},
+		{"empty name", ": nop", r8.ErrBadLabel, "line 1:"},
+		{"forward branch out of range", "bra far\n" + nops(128) + "far:", r8.ErrBadOperand, "line 1:"},
+		{"backward branch out of range", "back:\n" + nops(127) + "bra back", r8.ErrBadOperand, "line 129:"},
+		{"ld rejects a label", "x: ld x", r8.ErrBadOperand, "line 1:"},
+		{"program larger than memory", nops(r8.MemSize + 1), r8.ErrProgramTooLarge, "line 65537:"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := r8.Assemble(c.src)
+			if !errors.Is(err, c.wantErr) {
+				t.Fatalf("want %v, got %v", c.wantErr, err)
+			}
+			if !strings.HasPrefix(err.Error(), c.wantMsg) {
+				t.Errorf("want error starting %q, got %q", c.wantMsg, err)
+			}
+		})
+	}
+}
+
+func TestAssembleLabelsRun(t *testing.T) {
+	t.Parallel()
+	program, err := r8.Assemble(`
+		ld 5
+	loop:
+		dec
+		beq done
+		jmp loop
+	done:
+		halt`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpu := r8.NewCPU()
+	if err := cpu.LoadProgram(program, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := cpu.RunN(100); err != nil {
+		t.Fatal(err)
+	}
+	if !cpu.Halted || cpu.A != 0 {
+		t.Errorf("want Halted with A == 0, got Halted=%v A=%d", cpu.Halted, cpu.A)
 	}
 }
 

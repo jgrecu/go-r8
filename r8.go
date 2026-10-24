@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // CPU is an R8 CPU clocked at 4MHz, with 64KiB of static RAM, an 8-bit data
@@ -48,6 +50,9 @@ var (
 	ErrUnknownInstruction = errors.New("unknown instruction")
 	ErrBadOperand         = errors.New("bad operand")
 	ErrMissingOperand     = errors.New("missing operand")
+	ErrUndefinedLabel     = errors.New("undefined label")
+	ErrDuplicateLabel     = errors.New("duplicate label")
+	ErrBadLabel           = errors.New("bad label name")
 )
 
 // IllegalInstructionError reports an undefined opcode and the address it was
@@ -116,6 +121,42 @@ func (k operandKind) parse(s string) (uint16, error) {
 	}
 	v, err := strconv.ParseUint(s, 0, 8*k.size())
 	return uint16(v), err
+}
+
+// resolve returns the value of operand token tok, which is a number or a
+// label. A label gives an absolute address for addr16, or an offset from
+// next, the address of the following instruction, for rel8.
+func (k operandKind) resolve(tok string, labels map[string]int, next int) (uint16, error) {
+	if !isLabel(tok) {
+		return k.parse(tok)
+	}
+	if k != addr16 && k != rel8 {
+		return 0, errors.New("labels are only allowed for jumps and branches")
+	}
+	addr, ok := labels[tok]
+	if !ok {
+		return 0, ErrUndefinedLabel
+	}
+	if k == addr16 {
+		return uint16(addr), nil
+	}
+	off := addr - next
+	if off < math.MinInt8 || off > math.MaxInt8 {
+		return 0, fmt.Errorf("label %q is %d bytes away, beyond %d to %d",
+			tok, off, math.MinInt8, math.MaxInt8)
+	}
+	return uint16(uint8(int8(off))), nil
+}
+
+// isLabel reports whether s is a valid label name: a letter or underscore,
+// then any number of letters, digits, and underscores.
+func isLabel(s string) bool {
+	for i, r := range s {
+		if r != '_' && !unicode.IsLetter(r) && (i == 0 || !unicode.IsDigit(r)) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // format returns the source text for v: decimal for bytes (signed for
@@ -269,8 +310,8 @@ func (cpu *CPU) NextInstruction() string {
 
 // Disassemble converts machine code into one line of source per instruction.
 // Byte operands are shown in decimal (signed for branch offsets) and 16-bit
-// addresses in hex. Unknown opcodes and a final instruction missing its
-// operands are shown as "???".
+// addresses in hex. Unknown opcodes are shown as "???", and a final
+// instruction missing its operands as its mnemonic followed by "???".
 func Disassemble(code []byte) string {
 	var lines []string
 	for i := 0; i < len(code); {
@@ -282,7 +323,7 @@ func Disassemble(code []byte) string {
 		}
 		end := i + inst.operand.size()
 		if end > len(code) {
-			lines = append(lines, inst.mnemonic, "???")
+			lines = append(lines, inst.mnemonic+" ???")
 			break
 		}
 		lines = append(lines, inst.source(inst.operand.decode(code[i:end])))
@@ -296,44 +337,114 @@ func Disassemble(code []byte) string {
 // after ";" is a comment. Mnemonics are case-insensitive, and operands may be
 // written in any base accepted by strconv.ParseUint with base 0. Branch
 // offsets are signed (-128 to 127) and parsed with strconv.ParseInt instead.
-// Multi-byte operands are stored little-endian. Errors start with the line
-// number and wrap ErrUnknownInstruction, ErrBadOperand, or ErrMissingOperand.
+// Multi-byte operands are stored little-endian.
+//
+// A token ending in ":", such as "loop:", defines a label at the address of
+// the next instruction, counting from 0. Label names are case-sensitive,
+// start with a letter or underscore, and continue with letters, digits, and
+// underscores. A jump operand may name a label to use its address, and a
+// branch operand to use its offset; labels are not allowed elsewhere.
+//
+// Errors start with the line number and wrap one of the package's Err values.
 func Assemble(src string) ([]byte, error) {
-	var program []byte
+	stmts, labels, err := parse(src)
+	if err != nil {
+		return nil, err
+	}
+	return encode(stmts, labels)
+}
+
+// parse is the assembler's first pass: it splits src into statements and
+// records the address of each label.
+func parse(src string) ([]stmt, map[string]int, error) {
+	p := parser{labels: make(map[string]int)}
 	for n, line := range strings.Split(src, "\n") {
 		code, _, _ := strings.Cut(line, ";")
-		var err error
-		program, err = assembleLine(program, strings.Fields(code))
-		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", n+1, err)
+		if err := p.parseLine(n+1, strings.Fields(code)); err != nil {
+			return nil, nil, fmt.Errorf("line %d: %w", n+1, err)
 		}
+	}
+	return p.stmts, p.labels, nil
+}
+
+// encode is the assembler's second pass: it emits the machine code for
+// stmts, resolving operands that name labels.
+func encode(stmts []stmt, labels map[string]int) ([]byte, error) {
+	var program []byte
+	for _, s := range stmts {
+		inst := instructions[s.op]
+		program = append(program, s.op)
+		if inst.operand == none {
+			continue
+		}
+		next := len(program) + inst.operand.size()
+		v, err := inst.operand.resolve(s.operand, labels, next)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %s: %w %q: %w",
+				s.line, inst.mnemonic, ErrBadOperand, s.operand, err)
+		}
+		program = inst.operand.encode(program, v)
 	}
 	return program, nil
 }
 
-// assembleLine appends the machine code for one line's tokens to program.
-func assembleLine(program []byte, tokens []string) ([]byte, error) {
+// stmt is one instruction from the source, with its operand not yet resolved.
+type stmt struct {
+	line    int    // source line number, for error messages
+	op      byte   // opcode
+	operand string // operand token, empty if the instruction takes none
+}
+
+// parser holds the state of the first pass. It can assign label addresses
+// before reading any operand because every instruction's size follows from
+// its opcode alone.
+type parser struct {
+	stmts  []stmt
+	labels map[string]int
+	pc     int // address of the next instruction
+}
+
+// parseLine adds the labels and instructions in one line's tokens.
+func (p *parser) parseLine(line int, tokens []string) error {
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
-		op, ok := opcodes[strings.ToLower(tok)]
-		if !ok {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownInstruction, tok)
-		}
-		program = append(program, op)
-
-		kind := instructions[op].operand
-		if kind == none {
+		if name, ok := strings.CutSuffix(tok, ":"); ok {
+			if err := p.define(name); err != nil {
+				return err
+			}
 			continue
 		}
-		i++
-		if i == len(tokens) {
-			return nil, fmt.Errorf("%s: %w", tok, ErrMissingOperand)
+		op, ok := opcodes[strings.ToLower(tok)]
+		if !ok {
+			return fmt.Errorf("%w: %q", ErrUnknownInstruction, tok)
 		}
-		v, err := kind.parse(tokens[i])
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w %q: %w", tok, ErrBadOperand, tokens[i], err)
+		s := stmt{line: line, op: op}
+
+		kind := instructions[op].operand
+		if kind != none {
+			i++
+			if i == len(tokens) {
+				return fmt.Errorf("%s: %w", tok, ErrMissingOperand)
+			}
+			s.operand = tokens[i]
 		}
-		program = kind.encode(program, v)
+		p.pc += 1 + kind.size()
+		if p.pc > MemSize {
+			return fmt.Errorf("%w: %d bytes", ErrProgramTooLarge, p.pc)
+		}
+		p.stmts = append(p.stmts, s)
 	}
-	return program, nil
+	return nil
+}
+
+// define records label name at the current address.
+func (p *parser) define(name string) error {
+	if !isLabel(name) {
+		return fmt.Errorf("%w: %q", ErrBadLabel, name)
+	}
+	if _, dup := p.labels[name]; dup {
+		return fmt.Errorf("%w: %q", ErrDuplicateLabel, name)
+	}
+	p.labels[name] = p.pc
+	return nil
 }
