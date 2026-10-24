@@ -40,7 +40,7 @@ That's a great start! For the next challenge, read the tutorial:
 
 [![CI](https://github.com/jgrecu/go-r8/actions/workflows/ci.yml/badge.svg)](https://github.com/jgrecu/go-r8/actions/workflows/ci.yml)
 
-The repository has the `r8` emulator package plus three commands for working with R8 programs.
+The repository has the `r8` emulator package plus three commands for working with R8 programs. The CPU and its assembly language are specified in the R8 Programmer's Manual; this emulator implements a subset of it so far.
 
 ### Instruction set
 
@@ -61,14 +61,15 @@ Branch offsets count from the start of the next instruction.
 ### Assembly syntax
 
 ```asm
-        ld 10     ; load 10 into A
+        ld 0x0A   ; load 10 into A
 loop:   dec       ; decrement A
         bne loop  ; repeat until A is zero
         halt      ; stop
 ```
 
 * Text after `;` is a comment.
-* Mnemonics are case-insensitive. Numbers can be decimal, hex (`0x0A`), octal (`0o12`) or binary (`0b1010`).
+* Mnemonics are case-insensitive. Whitespace only separates tokens, and commas separate operands with or without spaces.
+* As in the R8 manual, numbers must be `0x`-prefixed hex (`0x0A`). A raw branch offset is a two's complement byte, so `0xFD` means -3.
 * `name:` defines a label at the address of the next instruction. Addresses start at 0. Label names are case-sensitive.
 * A branch that names a label assembles to that label's offset. A `jmp` that names one assembles to its address.
 * Each error message starts with the line number, for example `line 3: bne: bad operand "lop": undefined label`.
@@ -86,12 +87,12 @@ go run ./cmd/disassembler [-o program.src] program.bin
 go run ./cmd/monitor program.bin
 ```
 
-For example, save the countdown loop above as `program.asm`, then assemble, disassemble and step through it. In the disassembler's output, the label shows up as the raw offset `bne -3`. Files named `program.*` are gitignored.
+For example, the countdown loop above is in [`program.asm`](program.asm): assemble, disassemble and step through it with the commands as shown. In the disassembler's output, the label shows up as the raw offset with its signed value in a comment: `bne 0xFD ; bne -3`. The generated `*.bin` and `*.src` files are gitignored.
 
 ### Library
 
 ```go
-program, err := r8.Assemble("ld 3\nloop: dec\nbne loop\nhalt")
+program, err := r8.Assemble("ld 0x03\nloop: dec\nbne loop\nhalt")
 if err != nil {
 	log.Fatal(err)
 }

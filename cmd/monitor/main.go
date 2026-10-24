@@ -55,7 +55,10 @@ func run(args []string, in io.Reader, out io.Writer) error {
 // and A. It has no trailing newline: at a terminal, the user's Enter key
 // supplies it.
 func status(cpu *r8.CPU) string {
-	label := fmt.Sprintf("next %-12q", strings.ToUpper(cpu.NextInstruction()))
+	// Only the mnemonic is uppercased: the assembler reads "0x" but not "0X".
+	mnemonic, operand, _ := strings.Cut(cpu.NextInstruction(), " ")
+	next := strings.TrimSpace(strings.ToUpper(mnemonic) + " " + operand)
+	label := fmt.Sprintf("next %-12q", next)
 	if cpu.Halted {
 		label = "halted"
 	}

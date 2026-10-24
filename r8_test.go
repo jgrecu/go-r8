@@ -193,25 +193,25 @@ func TestCpuRun(t *testing.T) {
 		{"dec decrements A", []string{"INC", "DEC", "HALT"}, 0, 0, 0, 3},
 		{"inc wraps A from 255 to 0", []string{"INC", "HALT"}, 255, 0, 0, 2},
 		{"dec wraps A from 0 to 255", []string{"DEC", "HALT"}, 0, 0, 255, 2},
-		{"ld sets A", []string{"LD", "10", "HALT"}, 0, 0, 10, 3},
+		{"ld sets A", []string{"LD", "0x0A", "HALT"}, 0, 0, 10, 3},
 		{"pc wraps from 65535 to 0", []string{"NOP", "HALT"}, 0, 65535, 0, 0},
-		{"jmp skips inc", []string{"JMP", "4", "INC", "HALT"}, 0, 0, 0, 5},
-		{"jmp after ld", []string{"LD", "10", "JMP", "0x0006", "INC", "HALT"}, 0, 0, 10, 7},
-		{"jmp into own operand", []string{"JMP", "2", "INC", "HALT"}, 0, 0, 0, 3},
-		{"bra 0 falls through", []string{"BRA", "0", "INC", "HALT"}, 0, 0, 1, 4},
-		{"bra 1 skips inc", []string{"BRA", "1", "INC", "HALT"}, 0, 0, 0, 4},
-		{"bra skips several instructions", []string{"BRA", "2", "INC", "INC", "INC", "HALT"}, 0, 0, 1, 6},
-		{"bra after ld", []string{"LD", "10", "BRA", "1", "INC", "HALT"}, 0, 0, 10, 6},
-		{"beq taken when A is zero", []string{"BEQ", "1", "INC", "HALT"}, 0, 0, 0, 4},
-		{"beq not taken when A is nonzero", []string{"LD", "5", "BEQ", "1", "INC", "HALT"}, 0, 0, 6, 6},
-		{"beq taken after dec reaches zero", []string{"LD", "1", "DEC", "BEQ", "1", "INC", "HALT"}, 0, 0, 0, 7},
-		{"beq 0 falls through", []string{"BEQ", "0", "INC", "HALT"}, 0, 0, 1, 4},
-		{"bne taken when A is nonzero", []string{"LD", "5", "BNE", "1", "INC", "HALT"}, 0, 0, 5, 6},
-		{"bne not taken when A is zero", []string{"BNE", "1", "INC", "HALT"}, 0, 0, 1, 4},
-		{"bne not taken after dec reaches zero", []string{"LD", "1", "DEC", "BNE", "1", "INC", "HALT"}, 0, 0, 1, 7},
-		{"bne 0 falls through", []string{"LD", "5", "BNE", "0", "INC", "HALT"}, 0, 0, 6, 6},
-		{"bne backward loops until A is zero", []string{"LD", "3", "DEC", "BNE", "-3", "HALT"}, 0, 0, 0, 6},
-		{"beq backward taken once", []string{"BRA", "1", "HALT", "LD", "0", "BEQ", "-5"}, 0, 0, 0, 3},
+		{"jmp skips inc", []string{"JMP", "0x04", "INC", "HALT"}, 0, 0, 0, 5},
+		{"jmp after ld", []string{"LD", "0x0A", "JMP", "0x0006", "INC", "HALT"}, 0, 0, 10, 7},
+		{"jmp into own operand", []string{"JMP", "0x02", "INC", "HALT"}, 0, 0, 0, 3},
+		{"bra 0 falls through", []string{"BRA", "0x00", "INC", "HALT"}, 0, 0, 1, 4},
+		{"bra 1 skips inc", []string{"BRA", "0x01", "INC", "HALT"}, 0, 0, 0, 4},
+		{"bra skips several instructions", []string{"BRA", "0x02", "INC", "INC", "INC", "HALT"}, 0, 0, 1, 6},
+		{"bra after ld", []string{"LD", "0x0A", "BRA", "0x01", "INC", "HALT"}, 0, 0, 10, 6},
+		{"beq taken when A is zero", []string{"BEQ", "0x01", "INC", "HALT"}, 0, 0, 0, 4},
+		{"beq not taken when A is nonzero", []string{"LD", "0x05", "BEQ", "0x01", "INC", "HALT"}, 0, 0, 6, 6},
+		{"beq taken after dec reaches zero", []string{"LD", "0x01", "DEC", "BEQ", "0x01", "INC", "HALT"}, 0, 0, 0, 7},
+		{"beq 0 falls through", []string{"BEQ", "0x00", "INC", "HALT"}, 0, 0, 1, 4},
+		{"bne taken when A is nonzero", []string{"LD", "0x05", "BNE", "0x01", "INC", "HALT"}, 0, 0, 5, 6},
+		{"bne not taken when A is zero", []string{"BNE", "0x01", "INC", "HALT"}, 0, 0, 1, 4},
+		{"bne not taken after dec reaches zero", []string{"LD", "0x01", "DEC", "BNE", "0x01", "INC", "HALT"}, 0, 0, 1, 7},
+		{"bne 0 falls through", []string{"LD", "0x05", "BNE", "0x00", "INC", "HALT"}, 0, 0, 6, 6},
+		{"bne backward loops until A is zero", []string{"LD", "0x03", "DEC", "BNE", "0xFD", "HALT"}, 0, 0, 0, 6},
+		{"beq backward taken once", []string{"BRA", "0x01", "HALT", "LD", "0x00", "BEQ", "0xFB"}, 0, 0, 0, 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -405,10 +405,10 @@ func TestNextInstruction(t *testing.T) {
 	}{
 		{"no operand", 0x0000, map[uint16]byte{0x0000: r8.OpInc}, "inc"},
 		{"unknown opcode", 0x0000, map[uint16]byte{0x0000: 0xFF}, "???"},
-		{"ld at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpLd, 0x0000: 5}, "ld 5"},
+		{"ld at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpLd, 0x0000: 5}, "ld 0x05"},
 		{"jmp at second-last byte", 0xFFFE, map[uint16]byte{0xFFFE: r8.OpJmp, 0xFFFF: 0x34, 0x0000: 0x12}, "jmp 0x1234"},
 		{"jmp at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpJmp, 0x0000: 0x34, 0x0001: 0x12}, "jmp 0x1234"},
-		{"bne negative offset", 0x0010, map[uint16]byte{0x0010: r8.OpBne, 0x0011: 0xFD}, "bne -3"},
+		{"bne negative offset", 0x0010, map[uint16]byte{0x0010: r8.OpBne, 0x0011: 0xFD}, "bne 0xFD"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -427,7 +427,7 @@ func TestNextInstruction(t *testing.T) {
 
 func TestJmpInfiniteLoop(t *testing.T) {
 	t.Parallel()
-	cpu := newTestCPU(t, "LD", "10", "INC", "JMP", "0x0002")
+	cpu := newTestCPU(t, "LD", "0x0A", "INC", "JMP", "0x0002")
 	for range 1 + 3*2 { // ld, then 3 iterations of inc+jmp
 		mustStep(t, cpu)
 	}
@@ -447,22 +447,32 @@ func TestAssembleErrors(t *testing.T) {
 		wantErr error
 	}{
 		{"invalid operand", []string{"LD", "not_a_number"}, r8.ErrBadOperand},
-		{"operand out of range", []string{"LD", "300"}, r8.ErrBadOperand},
+		{"operand out of range", []string{"LD", "0x100"}, r8.ErrBadOperand},
 		{"unknown instruction", []string{"FOOBAR"}, r8.ErrUnknownInstruction},
 		{"missing operand", []string{"LD"}, r8.ErrMissingOperand},
-		{"jmp address out of range", []string{"JMP", "65536"}, r8.ErrBadOperand},
+		{"jmp address out of range", []string{"JMP", "0x10000"}, r8.ErrBadOperand},
 		{"jmp missing operand", []string{"JMP"}, r8.ErrMissingOperand},
 		{"bra missing operand", []string{"BRA"}, r8.ErrMissingOperand},
-		{"bra operand above signed range", []string{"BRA", "128"}, r8.ErrBadOperand},
-		{"bra operand below signed range", []string{"BRA", "-129"}, r8.ErrBadOperand},
-		{"bra unsigned hex is out of range", []string{"BRA", "0xFF"}, r8.ErrBadOperand},
-		{"ld rejects negative operand", []string{"LD", "-1"}, r8.ErrBadOperand},
-		{"jmp rejects negative operand", []string{"JMP", "-1"}, r8.ErrBadOperand},
+		{"bra operand out of range", []string{"BRA", "0x100"}, r8.ErrBadOperand},
+		{"ld rejects negative operand", []string{"LD", "-0x01"}, r8.ErrBadOperand},
+		{"bra rejects negative operand", []string{"BRA", "-0x03"}, r8.ErrBadOperand},
 		{"bra invalid operand", []string{"BRA", "x"}, r8.ErrBadOperand},
 		{"beq missing operand", []string{"BEQ"}, r8.ErrMissingOperand},
-		{"beq operand out of range", []string{"BEQ", "128"}, r8.ErrBadOperand},
+		{"beq operand out of range", []string{"BEQ", "0x100"}, r8.ErrBadOperand},
 		{"bne missing operand", []string{"BNE"}, r8.ErrMissingOperand},
-		{"bne operand out of range", []string{"BNE", "-129"}, r8.ErrBadOperand},
+		{"bne operand out of range", []string{"BNE", "0x100"}, r8.ErrBadOperand},
+		{"decimal is rejected", []string{"LD", "5"}, r8.ErrBadOperand},
+		{"signed decimal offset is rejected", []string{"BRA", "-3"}, r8.ErrBadOperand},
+		{"binary is rejected", []string{"LD", "0b101"}, r8.ErrBadOperand},
+		{"octal is rejected", []string{"LD", "0o7"}, r8.ErrBadOperand},
+		{"uppercase prefix is rejected", []string{"LD", "0X05"}, r8.ErrBadOperand},
+		{"prefix without digits", []string{"LD", "0x"}, r8.ErrBadOperand},
+		{"underscore in digits", []string{"JMP", "0x12_34"}, r8.ErrBadOperand},
+		{"too many operands", []string{"LD", "0x05,", "0x06"}, r8.ErrBadOperand},
+		{"too many operands without spaces", []string{"LD", "0x05,0x06"}, r8.ErrBadOperand},
+		{"too many operands with spaced comma", []string{"LD", "0x05", ",", "0x06"}, r8.ErrBadOperand},
+		{"comma after operandless instruction", []string{"INC,", "DEC"}, r8.ErrBadOperand},
+		{"comma instead of operand", []string{"LD", ",0x05"}, r8.ErrMissingOperand},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -478,9 +488,9 @@ func TestAssembleErrors(t *testing.T) {
 func TestAssembleSource(t *testing.T) {
 	t.Parallel()
 	src := `; count down from 3
-ld 3      ; A = 3
+ld 0x03   ; A = 3
 dec
-bne -3    ; back to dec
+bne 0xFD  ; back to dec
 
 halt`
 	got, err := r8.Assemble(src)
@@ -502,8 +512,8 @@ func TestAssembleErrorReportsLineNumber(t *testing.T) {
 		wantMsg string
 	}{
 		{"unknown instruction", "nop\n\nfoo", r8.ErrUnknownInstruction, "line 3:"},
-		{"bad operand", "; comment\nld 300", r8.ErrBadOperand, "line 2:"},
-		{"operand must be on the same line", "ld\n5", r8.ErrMissingOperand, "line 1:"},
+		{"bad operand", "; comment\nld 0x100", r8.ErrBadOperand, "line 2:"},
+		{"operand must be on the same line", "ld\n0x05", r8.ErrMissingOperand, "line 1:"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -531,14 +541,14 @@ func TestAssembleLabels(t *testing.T) {
 		src  string
 		want []byte
 	}{
-		{"backward branch", "ld 3\nloop: dec\nbne loop\nhalt", []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt}},
+		{"backward branch", "ld 0x03\nloop: dec\nbne loop\nhalt", []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt}},
 		{"forward branch", "beq done\ninc\ndone: halt", []byte{r8.OpBeq, 1, r8.OpInc, r8.OpHalt}},
 		{"jmp to absolute address", "jmp start\ninc\nstart: halt", []byte{r8.OpJmp, 0x04, 0x00, r8.OpInc, r8.OpHalt}},
 		{"label on its own line", "loop:\ndec\nbne loop", []byte{r8.OpDec, r8.OpBne, 0xFD}},
 		{"two labels at one address", "a:\nb: inc\nbra a\nbra b", []byte{r8.OpInc, r8.OpBra, 0xFD, r8.OpBra, 0xFB}},
 		{"label at end of program", "bra end\nend:", []byte{r8.OpBra, 0}},
 		{"label named like a mnemonic", "inc: bra inc", []byte{r8.OpBra, 0xFE}},
-		{"numbers still work beside labels", "x: bra -2\njmp x", []byte{r8.OpBra, 0xFE, r8.OpJmp, 0, 0}},
+		{"numbers still work beside labels", "x: bra 0xFE\njmp x", []byte{r8.OpBra, 0xFE, r8.OpJmp, 0, 0}},
 		{
 			"max forward offset",
 			"bra far\n" + nops(127) + "far: halt",
@@ -600,7 +610,7 @@ func TestAssembleLabelErrors(t *testing.T) {
 func TestAssembleLabelsRun(t *testing.T) {
 	t.Parallel()
 	program, err := r8.Assemble(`
-		ld 5
+		ld 0x05
 	loop:
 		dec
 		beq done
@@ -635,25 +645,24 @@ func TestAssembleDisassemble(t *testing.T) {
 		{"inc", []string{"INC"}, []byte{0x30}, "inc"},
 		{"dec", []string{"DEC"}, []byte{0x40}, "dec"},
 		{"halt", []string{"HALT"}, []byte{0x00}, "halt"},
-		{"ld 20", []string{"LD", "20"}, []byte{0x10, 0x14}, "ld 20"},
+		{"ld 0x14", []string{"LD", "0x14"}, []byte{0x10, 0x14}, "ld 0x14"},
+		{"lowercase hex digits", []string{"LD", "0xff"}, []byte{0x10, 0xFF}, "ld 0xFF"},
 		{"mixedcase", []string{"nop", "Inc", "dEc", "HaLt"}, []byte{0x01, 0x30, 0x40, 0x00}, "nop\ninc\ndec\nhalt"},
 		{"sequence", []string{"INC", "INC", "DEC", "HALT"}, []byte{0x30, 0x30, 0x40, 0x00}, "inc\ninc\ndec\nhalt"},
 		{"jmp 0x0002", []string{"JMP", "0x0002"}, []byte{0xF7, 0x02, 0x00}, "jmp 0x0002"},
 		{"jmp high byte", []string{"JMP", "0x1234"}, []byte{0xF7, 0x34, 0x12}, "jmp 0x1234"},
-		{"jmp decimal in, hex out", []string{"JMP", "256"}, []byte{0xF7, 0x00, 0x01}, "jmp 0x0100"},
-		{"bra 3", []string{"BRA", "3"}, []byte{0xF0, 0x03}, "bra 3"},
-		{"bra 0", []string{"BRA", "0"}, []byte{0xF0, 0x00}, "bra 0"},
-		{"bra hex in, decimal out", []string{"BRA", "0x7F"}, []byte{0xF0, 0x7F}, "bra 127"},
-		{"bra -1", []string{"BRA", "-1"}, []byte{0xF0, 0xFF}, "bra -1"},
-		{"bra -128", []string{"BRA", "-128"}, []byte{0xF0, 0x80}, "bra -128"},
-		{"beq -3", []string{"BEQ", "-3"}, []byte{0xF1, 0xFD}, "beq -3"},
-		{"bne -3", []string{"BNE", "-3"}, []byte{0xF2, 0xFD}, "bne -3"},
-		{"bne backward loop", []string{"LD", "3", "DEC", "BNE", "-3", "HALT"}, []byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}, "ld 3\ndec\nbne -3\nhalt"},
-		{"bra in sequence", []string{"BRA", "1", "INC", "HALT"}, []byte{0xF0, 0x01, 0x30, 0x00}, "bra 1\ninc\nhalt"},
-		{"beq 3", []string{"BEQ", "3"}, []byte{0xF1, 0x03}, "beq 3"},
-		{"beq in sequence", []string{"LD", "0", "BEQ", "1", "INC", "HALT"}, []byte{0x10, 0x00, 0xF1, 0x01, 0x30, 0x00}, "ld 0\nbeq 1\ninc\nhalt"},
-		{"bne 3", []string{"BNE", "3"}, []byte{0xF2, 0x03}, "bne 3"},
-		{"bne in sequence", []string{"LD", "5", "BNE", "1", "INC", "HALT"}, []byte{0x10, 0x05, 0xF2, 0x01, 0x30, 0x00}, "ld 5\nbne 1\ninc\nhalt"},
+		{"jmp short hex in, four digits out", []string{"JMP", "0x100"}, []byte{0xF7, 0x00, 0x01}, "jmp 0x0100"},
+		{"bra 0x03", []string{"BRA", "0x03"}, []byte{0xF0, 0x03}, "bra 0x03 ; bra 3"},
+		{"bra 0x00", []string{"BRA", "0x00"}, []byte{0xF0, 0x00}, "bra 0x00 ; bra 0"},
+		{"bra max forward", []string{"BRA", "0x7F"}, []byte{0xF0, 0x7F}, "bra 0x7F ; bra 127"},
+		{"bra 0xFF is -1", []string{"BRA", "0xFF"}, []byte{0xF0, 0xFF}, "bra 0xFF ; bra -1"},
+		{"bra 0x80 is -128", []string{"BRA", "0x80"}, []byte{0xF0, 0x80}, "bra 0x80 ; bra -128"},
+		{"beq 0xFD", []string{"BEQ", "0xFD"}, []byte{0xF1, 0xFD}, "beq 0xFD ; beq -3"},
+		{"bne 0xFD", []string{"BNE", "0xFD"}, []byte{0xF2, 0xFD}, "bne 0xFD ; bne -3"},
+		{"bne backward loop", []string{"LD", "0x03", "DEC", "BNE", "0xFD", "HALT"}, []byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}, "ld 0x03\ndec\nbne 0xFD ; bne -3\nhalt"},
+		{"bra in sequence", []string{"BRA", "0x01", "INC", "HALT"}, []byte{0xF0, 0x01, 0x30, 0x00}, "bra 0x01 ; bra 1\ninc\nhalt"},
+		{"beq in sequence", []string{"LD", "0x00", "BEQ", "0x01", "INC", "HALT"}, []byte{0x10, 0x00, 0xF1, 0x01, 0x30, 0x00}, "ld 0x00\nbeq 0x01 ; beq 1\ninc\nhalt"},
+		{"bne in sequence", []string{"LD", "0x05", "BNE", "0x01", "INC", "HALT"}, []byte{0x10, 0x05, 0xF2, 0x01, 0x30, 0x00}, "ld 0x05\nbne 0x01 ; bne 1\ninc\nhalt"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -669,6 +678,14 @@ func TestAssembleDisassemble(t *testing.T) {
 			dasm := r8.Disassemble(asm)
 			if dasm != c.wantDasm {
 				t.Errorf("roundtrip %v -> dasm=%#v want %#v", c.inTokens, dasm, c.wantDasm)
+			}
+
+			reasm, err := r8.Assemble(dasm)
+			if err != nil {
+				t.Fatalf("Assemble(Disassemble(...)): %v", err)
+			}
+			if !bytes.Equal(reasm, asm) {
+				t.Errorf("Assemble(%q)=% X want % X", dasm, reasm, asm)
 			}
 		})
 	}
