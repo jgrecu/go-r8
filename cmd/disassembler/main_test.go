@@ -25,7 +25,7 @@ func TestRunWritesSourceToStdout(t *testing.T) {
 	if err := run([]string{"-o", "-", bin}, &stdout); err != nil {
 		t.Fatal(err)
 	}
-	if want := "ld 3\ndec\nbne -3\nhalt\n"; stdout.String() != want {
+	if want := "ld 0x03\ndec\nbne 0xFD ; bne -3\nhalt\n"; stdout.String() != want {
 		t.Errorf("want %q, got %q", want, stdout.String())
 	}
 }

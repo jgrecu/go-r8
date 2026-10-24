@@ -28,7 +28,7 @@ func TestRunStepsOncePerInputLineAndShowsFinalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := header + "\n" +
-		`next "LD 7"       => 0000000 > 0000` +
+		`next "LD 0x07"    => 0000000 > 0000` +
 		`next "INC"        => 0000002 > 0007` +
 		`next "HALT"       => 0000003 > 0008` +
 		`halted            => 0000004 > 0008` + "\n"

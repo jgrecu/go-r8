@@ -21,7 +21,7 @@ func writeTemp(t *testing.T, name, content string) string {
 
 func TestRunWritesMachineCodeToStdout(t *testing.T) {
 	t.Parallel()
-	src := writeTemp(t, "prog.src", "ld 3\ndec\nbne -3\nhalt\n")
+	src := writeTemp(t, "prog.src", "ld 0x03\ndec\nbne 0xFD\nhalt\n")
 	var stdout bytes.Buffer
 	if err := run([]string{"-o", "-", src}, &stdout); err != nil {
 		t.Fatal(err)

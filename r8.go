@@ -111,15 +111,15 @@ func (k operandKind) encode(code []byte, v uint16) []byte {
 	return code
 }
 
-// parse converts source text to an operand value. Any base accepted by
-// strconv with base 0 is allowed; rel8 is signed and stored in two's
-// complement.
+// parse converts a literal to an operand value. As in the R8 manual, only
+// 0x-prefixed hex is recognised. A rel8 offset is written as its two's
+// complement byte, so 0xFD branches back 3.
 func (k operandKind) parse(s string) (uint16, error) {
-	if k == rel8 {
-		v, err := strconv.ParseInt(s, 0, 8)
-		return uint16(uint8(v)), err
+	digits, ok := strings.CutPrefix(s, "0x")
+	if !ok {
+		return 0, errors.New("literals must be 0x-prefixed hex")
 	}
-	v, err := strconv.ParseUint(s, 0, 8*k.size())
+	v, err := strconv.ParseUint(digits, 16, 8*k.size())
 	return uint16(v), err
 }
 
@@ -159,16 +159,13 @@ func isLabel(s string) bool {
 	return s != ""
 }
 
-// format returns the source text for v: decimal for bytes (signed for
-// offsets) and hex for addresses.
+// format returns the source text for v as 0x-prefixed hex: two digits for
+// bytes and offsets, four for addresses.
 func (k operandKind) format(v uint16) string {
-	switch k {
-	case rel8:
-		return strconv.Itoa(int(int8(v)))
-	case addr16:
+	if k == addr16 {
 		return fmt.Sprintf("0x%04X", v)
 	}
-	return strconv.Itoa(int(v))
+	return fmt.Sprintf("0x%02X", v)
 }
 
 // instruction describes one opcode. execute runs after Step has fetched the
@@ -309,9 +306,10 @@ func (cpu *CPU) NextInstruction() string {
 }
 
 // Disassemble converts machine code into one line of source per instruction.
-// Byte operands are shown in decimal (signed for branch offsets) and 16-bit
-// addresses in hex. Unknown opcodes are shown as "???", and a final
-// instruction missing its operands as its mnemonic followed by "???".
+// Operands are shown as 0x-prefixed hex, and a branch is followed by a
+// comment giving its signed offset, as in "bne 0xFD ; bne -3". Unknown
+// opcodes are shown as "???", and a final instruction missing its operands
+// as its mnemonic followed by "???".
 func Disassemble(code []byte) string {
 	var lines []string
 	for i := 0; i < len(code); {
@@ -326,7 +324,12 @@ func Disassemble(code []byte) string {
 			lines = append(lines, inst.mnemonic+" ???")
 			break
 		}
-		lines = append(lines, inst.source(inst.operand.decode(code[i:end])))
+		v := inst.operand.decode(code[i:end])
+		line := inst.source(v)
+		if inst.operand == rel8 {
+			line += " ; " + inst.mnemonic + " " + strconv.Itoa(int(int8(v)))
+		}
+		lines = append(lines, line)
 		i = end
 	}
 	return strings.Join(lines, "\n")
@@ -334,10 +337,11 @@ func Disassemble(code []byte) string {
 
 // Assemble converts source text into machine code. Each line holds zero or
 // more instructions, each followed by its operand on the same line; text
-// after ";" is a comment. Mnemonics are case-insensitive, and operands may be
-// written in any base accepted by strconv.ParseUint with base 0. Branch
-// offsets are signed (-128 to 127) and parsed with strconv.ParseInt instead.
-// Multi-byte operands are stored little-endian.
+// after ";" is a comment. Whitespace only separates tokens, and a comma
+// separates operands with or without spaces around it. Mnemonics are
+// case-insensitive. As in the R8 manual, numeric operands must be
+// 0x-prefixed hex; a branch offset is a two's complement byte, so 0xFD
+// branches back 3. Multi-byte operands are stored little-endian.
 //
 // A token ending in ":", such as "loop:", defines a label at the address of
 // the next instruction, counting from 0. Label names are case-sensitive,
@@ -360,11 +364,17 @@ func parse(src string) ([]stmt, map[string]int, error) {
 	p := parser{labels: make(map[string]int)}
 	for n, line := range strings.Split(src, "\n") {
 		code, _, _ := strings.Cut(line, ";")
-		if err := p.parseLine(n+1, strings.Fields(code)); err != nil {
+		if err := p.parseLine(n+1, tokenize(code)); err != nil {
 			return nil, nil, fmt.Errorf("line %d: %w", n+1, err)
 		}
 	}
 	return p.stmts, p.labels, nil
+}
+
+// tokenize splits one line of code into tokens. Whitespace only separates
+// tokens, and a comma is a token of its own with or without spaces around it.
+func tokenize(code string) []string {
+	return strings.Fields(strings.ReplaceAll(code, ",", " , "))
 }
 
 // encode is the assembler's second pass: it emits the machine code for
@@ -423,10 +433,13 @@ func (p *parser) parseLine(line int, tokens []string) error {
 		kind := instructions[op].operand
 		if kind != none {
 			i++
-			if i == len(tokens) {
+			if i == len(tokens) || tokens[i] == "," {
 				return fmt.Errorf("%s: %w", tok, ErrMissingOperand)
 			}
 			s.operand = tokens[i]
+		}
+		if i+1 < len(tokens) && tokens[i+1] == "," {
+			return fmt.Errorf("%s: %w: too many operands", tok, ErrBadOperand)
 		}
 		p.pc += 1 + kind.size()
 		if p.pc > MemSize {

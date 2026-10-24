@@ -7,7 +7,7 @@ import (
 )
 
 func ExampleAssemble() {
-	program, err := r8.Assemble("ld 3\ndec\nbne -3 ; loop until A is zero\nhalt")
+	program, err := r8.Assemble("ld 0x03\ndec\nbne 0xFD ; loop until A is zero\nhalt")
 	if err != nil {
 		panic(err)
 	}
@@ -17,9 +17,9 @@ func ExampleAssemble() {
 
 func ExampleAssemble_labels() {
 	program, err := r8.Assemble(`
-		ld 3
+		ld 0x03
 	loop:	dec
-		bne loop ; assembles to the offset -3
+		bne loop ; assembles to the offset 0xFD, or -3
 		halt`)
 	if err != nil {
 		panic(err)
@@ -31,14 +31,14 @@ func ExampleAssemble_labels() {
 func ExampleDisassemble() {
 	fmt.Println(r8.Disassemble([]byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}))
 	// Output:
-	// ld 3
+	// ld 0x03
 	// dec
-	// bne -3
+	// bne 0xFD ; bne -3
 	// halt
 }
 
 func ExampleCPU_RunN() {
-	program, err := r8.Assemble("ld 250\ninc\nbne -3\nhalt")
+	program, err := r8.Assemble("ld 0xFA\ninc\nbne 0xFD\nhalt")
 	if err != nil {
 		panic(err)
 	}
