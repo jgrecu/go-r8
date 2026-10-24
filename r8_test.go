@@ -28,6 +28,34 @@ func newTestCPU(t testing.TB, tokens ...string) *r8.CPU {
 	return cpu
 }
 
+// mustStep executes one instruction, failing the test if Step returns an error.
+func mustStep(t testing.TB, cpu *r8.CPU) {
+	t.Helper()
+	if err := cpu.Step(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// FuzzDisassembleAssemble checks that any machine code that disassembles
+// cleanly assembles back to exactly the same bytes.
+func FuzzDisassembleAssemble(f *testing.F) {
+	f.Add([]byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt})
+	f.Add([]byte{r8.OpJmp, 0x34, 0x12, r8.OpBra, 0x80})
+	f.Fuzz(func(t *testing.T, code []byte) {
+		src := r8.Disassemble(code)
+		if strings.Contains(src, "???") {
+			t.Skip()
+		}
+		got, err := r8.Assemble(src)
+		if err != nil {
+			t.Fatalf("Assemble(%q): %v", src, err)
+		}
+		if !bytes.Equal(got, code) {
+			t.Errorf("round trip of %v via %q gave %v", code, src, got)
+		}
+	})
+}
+
 func TestNewInitialisesCPU(t *testing.T) {
 	t.Parallel()
 	cpu := r8.NewCPU()
@@ -50,11 +78,11 @@ func TestNewInitialisesCPU(t *testing.T) {
 func TestStepIncrementsPC(t *testing.T) {
 	t.Parallel()
 	cpu := newTestCPU(t, "NOP", "NOP")
-	cpu.Step()
+	mustStep(t, cpu)
 	if cpu.PC != 1 {
 		t.Errorf("want pc == 1, got %d", cpu.PC)
 	}
-	cpu.Step()
+	mustStep(t, cpu)
 	if cpu.PC != 2 {
 		t.Errorf("want pc == 2, got %d", cpu.PC)
 	}
@@ -66,8 +94,8 @@ func TestStepReturnsIllegalInstructionErrorOnUnknownOpcode(t *testing.T) {
 	cpu.Memory[0] = 0xFF // not in instructions table
 
 	err := cpu.Step()
-	var illegal *r8.IllegalInstructionError
-	if !errors.As(err, &illegal) {
+	illegal, ok := errors.AsType[*r8.IllegalInstructionError](err)
+	if !ok {
 		t.Fatalf("want *IllegalInstructionError, got %v", err)
 	}
 	if illegal.Opcode != 0xFF {
@@ -319,7 +347,7 @@ func TestJmpOperandWrapsAroundMemory(t *testing.T) {
 	cpu.Memory[0xFFFE] = r8.OpJmp
 	cpu.Memory[0xFFFF] = 0x04 // lo
 	cpu.Memory[0x0000] = 0x00 // hi, read after PC wraps
-	cpu.Step()
+	mustStep(t, cpu)
 	if cpu.PC != 4 {
 		t.Errorf("want PC == 4, got %d", cpu.PC)
 	}
@@ -357,7 +385,7 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 			cpu.A = c.a
 			cpu.Memory[c.pc] = c.op
 			cpu.Memory[c.pc+1] = c.offset
-			cpu.Step()
+			mustStep(t, cpu)
 			if cpu.PC != c.wantPC {
 				t.Errorf("want PC == %#04x, got %#04x", c.wantPC, cpu.PC)
 			}
@@ -399,7 +427,7 @@ func TestJmpInfiniteLoop(t *testing.T) {
 	t.Parallel()
 	cpu := newTestCPU(t, "LD", "10", "INC", "JMP", "0x0002")
 	for range 1 + 3*2 { // ld, then 3 iterations of inc+jmp
-		cpu.Step()
+		mustStep(t, cpu)
 	}
 	if cpu.A != 13 {
 		t.Errorf("want A == 13, got %d", cpu.A)
@@ -492,48 +520,42 @@ func TestAssembleErrorReportsLineNumber(t *testing.T) {
 func TestAssembleDisassemble(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name        string
-		inTokens    []string
-		wantAsm     []byte
-		wantDasm    string
-		expectError bool
+		name     string
+		inTokens []string
+		wantAsm  []byte
+		wantDasm string
 	}{
-		{"empty", []string{}, []byte{}, "", false},
-		{"nop", []string{"NOP"}, []byte{0x01}, "nop", false},
-		{"inc", []string{"INC"}, []byte{0x30}, "inc", false},
-		{"dec", []string{"DEC"}, []byte{0x40}, "dec", false},
-		{"halt", []string{"HALT"}, []byte{0x00}, "halt", false},
-		{"ld 20", []string{"LD", "20"}, []byte{0x10, 0x14}, "ld 20", false},
-		{"mixedcase", []string{"nop", "Inc", "dEc", "HaLt"}, []byte{0x01, 0x30, 0x40, 0x00}, "nop\ninc\ndec\nhalt", false},
-		{"sequence", []string{"INC", "INC", "DEC", "HALT"}, []byte{0x30, 0x30, 0x40, 0x00}, "inc\ninc\ndec\nhalt", false},
-		{"unknown", []string{"FOOBAR"}, []byte{}, "", true},
-		{"unknown in sequence", []string{"INC", "INC", "FOO", "HALT"}, []byte{}, "", true},
-		{"jmp 0x0002", []string{"JMP", "0x0002"}, []byte{0xF7, 0x02, 0x00}, "jmp 0x0002", false},
-		{"jmp high byte", []string{"JMP", "0x1234"}, []byte{0xF7, 0x34, 0x12}, "jmp 0x1234", false},
-		{"jmp decimal in, hex out", []string{"JMP", "256"}, []byte{0xF7, 0x00, 0x01}, "jmp 0x0100", false},
-		{"bra 3", []string{"BRA", "3"}, []byte{0xF0, 0x03}, "bra 3", false},
-		{"bra 0", []string{"BRA", "0"}, []byte{0xF0, 0x00}, "bra 0", false},
-		{"bra hex in, decimal out", []string{"BRA", "0x7F"}, []byte{0xF0, 0x7F}, "bra 127", false},
-		{"bra -1", []string{"BRA", "-1"}, []byte{0xF0, 0xFF}, "bra -1", false},
-		{"bra -128", []string{"BRA", "-128"}, []byte{0xF0, 0x80}, "bra -128", false},
-		{"beq -3", []string{"BEQ", "-3"}, []byte{0xF1, 0xFD}, "beq -3", false},
-		{"bne -3", []string{"BNE", "-3"}, []byte{0xF2, 0xFD}, "bne -3", false},
-		{"bne backward loop", []string{"LD", "3", "DEC", "BNE", "-3", "HALT"}, []byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}, "ld 3\ndec\nbne -3\nhalt", false},
-		{"bra in sequence", []string{"BRA", "1", "INC", "HALT"}, []byte{0xF0, 0x01, 0x30, 0x00}, "bra 1\ninc\nhalt", false},
-		{"beq 3", []string{"BEQ", "3"}, []byte{0xF1, 0x03}, "beq 3", false},
-		{"beq in sequence", []string{"LD", "0", "BEQ", "1", "INC", "HALT"}, []byte{0x10, 0x00, 0xF1, 0x01, 0x30, 0x00}, "ld 0\nbeq 1\ninc\nhalt", false},
-		{"bne 3", []string{"BNE", "3"}, []byte{0xF2, 0x03}, "bne 3", false},
-		{"bne in sequence", []string{"LD", "5", "BNE", "1", "INC", "HALT"}, []byte{0x10, 0x05, 0xF2, 0x01, 0x30, 0x00}, "ld 5\nbne 1\ninc\nhalt", false},
+		{"empty", []string{}, nil, ""},
+		{"nop", []string{"NOP"}, []byte{0x01}, "nop"},
+		{"inc", []string{"INC"}, []byte{0x30}, "inc"},
+		{"dec", []string{"DEC"}, []byte{0x40}, "dec"},
+		{"halt", []string{"HALT"}, []byte{0x00}, "halt"},
+		{"ld 20", []string{"LD", "20"}, []byte{0x10, 0x14}, "ld 20"},
+		{"mixedcase", []string{"nop", "Inc", "dEc", "HaLt"}, []byte{0x01, 0x30, 0x40, 0x00}, "nop\ninc\ndec\nhalt"},
+		{"sequence", []string{"INC", "INC", "DEC", "HALT"}, []byte{0x30, 0x30, 0x40, 0x00}, "inc\ninc\ndec\nhalt"},
+		{"jmp 0x0002", []string{"JMP", "0x0002"}, []byte{0xF7, 0x02, 0x00}, "jmp 0x0002"},
+		{"jmp high byte", []string{"JMP", "0x1234"}, []byte{0xF7, 0x34, 0x12}, "jmp 0x1234"},
+		{"jmp decimal in, hex out", []string{"JMP", "256"}, []byte{0xF7, 0x00, 0x01}, "jmp 0x0100"},
+		{"bra 3", []string{"BRA", "3"}, []byte{0xF0, 0x03}, "bra 3"},
+		{"bra 0", []string{"BRA", "0"}, []byte{0xF0, 0x00}, "bra 0"},
+		{"bra hex in, decimal out", []string{"BRA", "0x7F"}, []byte{0xF0, 0x7F}, "bra 127"},
+		{"bra -1", []string{"BRA", "-1"}, []byte{0xF0, 0xFF}, "bra -1"},
+		{"bra -128", []string{"BRA", "-128"}, []byte{0xF0, 0x80}, "bra -128"},
+		{"beq -3", []string{"BEQ", "-3"}, []byte{0xF1, 0xFD}, "beq -3"},
+		{"bne -3", []string{"BNE", "-3"}, []byte{0xF2, 0xFD}, "bne -3"},
+		{"bne backward loop", []string{"LD", "3", "DEC", "BNE", "-3", "HALT"}, []byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}, "ld 3\ndec\nbne -3\nhalt"},
+		{"bra in sequence", []string{"BRA", "1", "INC", "HALT"}, []byte{0xF0, 0x01, 0x30, 0x00}, "bra 1\ninc\nhalt"},
+		{"beq 3", []string{"BEQ", "3"}, []byte{0xF1, 0x03}, "beq 3"},
+		{"beq in sequence", []string{"LD", "0", "BEQ", "1", "INC", "HALT"}, []byte{0x10, 0x00, 0xF1, 0x01, 0x30, 0x00}, "ld 0\nbeq 1\ninc\nhalt"},
+		{"bne 3", []string{"BNE", "3"}, []byte{0xF2, 0x03}, "bne 3"},
+		{"bne in sequence", []string{"LD", "5", "BNE", "1", "INC", "HALT"}, []byte{0x10, 0x05, 0xF2, 0x01, 0x30, 0x00}, "ld 5\nbne 1\ninc\nhalt"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			asm, err := assemble(c.inTokens...)
-			if err != nil && !c.expectError {
+			if err != nil {
 				t.Fatal(err)
-			}
-			if c.expectError && err == nil {
-				t.Fatal("want error, got nil")
 			}
 			if !bytes.Equal(asm, c.wantAsm) {
 				t.Errorf("Assemble(%v)=%v want %v", c.inTokens, asm, c.wantAsm)
