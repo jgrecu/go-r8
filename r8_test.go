@@ -112,6 +112,38 @@ func TestRunReturnsErrorOnIllegalInstruction(t *testing.T) {
 	}
 }
 
+func TestRunNReturnsErrStepLimitWhenProgramDoesNotHalt(t *testing.T) {
+	t.Parallel()
+	cpu := newTestCPU(t, "INC", "JMP", "0x0000")
+	err := cpu.RunN(10)
+	if !errors.Is(err, r8.ErrStepLimit) {
+		t.Fatalf("want ErrStepLimit, got %v", err)
+	}
+	if cpu.A != 5 {
+		t.Errorf("want A == 5 after 10 steps, got %d", cpu.A)
+	}
+}
+
+func TestRunNStopsAtHalt(t *testing.T) {
+	t.Parallel()
+	cpu := newTestCPU(t, "INC", "HALT", "INC")
+	if err := cpu.RunN(10); err != nil {
+		t.Fatal(err)
+	}
+	if !cpu.Halted || cpu.A != 1 {
+		t.Errorf("want Halted with A == 1, got Halted=%v A=%d", cpu.Halted, cpu.A)
+	}
+}
+
+func TestRunNReturnsIllegalInstructionError(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Memory[0] = 0xFF
+	if _, ok := errors.AsType[*r8.IllegalInstructionError](cpu.RunN(10)); !ok {
+		t.Fatal("want *IllegalInstructionError")
+	}
+}
+
 func TestCpuRun(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

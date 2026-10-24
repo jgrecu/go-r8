@@ -40,10 +40,11 @@ const (
 // MemSize is the size of the CPU's memory in bytes.
 const MemSize = 65536
 
-// Errors returned by LoadProgram and Assemble. Use errors.Is to
+// Errors returned by LoadProgram, RunN, and Assemble. Use errors.Is to
 // check for them, since they are usually wrapped with more context.
 var (
 	ErrProgramTooLarge    = errors.New("program does not fit into memory")
+	ErrStepLimit          = errors.New("step limit reached")
 	ErrUnknownInstruction = errors.New("unknown instruction")
 	ErrBadOperand         = errors.New("bad operand")
 	ErrMissingOperand     = errors.New("missing operand")
@@ -219,6 +220,24 @@ func (cpu *CPU) Run() error {
 		if err := cpu.Step(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// RunN executes at most n instructions, stopping early if the CPU halts or
+// Step returns an error. It returns ErrStepLimit if the CPU is still running
+// after n steps, which guards against programs that never halt.
+func (cpu *CPU) RunN(n int) error {
+	for range n {
+		if cpu.Halted {
+			return nil
+		}
+		if err := cpu.Step(); err != nil {
+			return err
+		}
+	}
+	if !cpu.Halted {
+		return fmt.Errorf("%w: %d", ErrStepLimit, n)
 	}
 	return nil
 }
