@@ -21,7 +21,7 @@ func writeTemp(t *testing.T, name, content string) string {
 
 func TestRunWritesMachineCodeToStdout(t *testing.T) {
 	t.Parallel()
-	src := writeTemp(t, "prog.src", "ld 0x03\ndec\nbne 0xFD\nhalt\n")
+	src := writeTemp(t, "prog.src", "ld a, 0x03\ndec a\nbne 0xFD\nhalt\n")
 	var stdout bytes.Buffer
 	if err := run([]string{"-o", "-", src}, &stdout); err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestRunWritesMachineCodeToStdout(t *testing.T) {
 
 func TestRunWritesMachineCodeToFile(t *testing.T) {
 	t.Parallel()
-	src := writeTemp(t, "prog.src", "inc halt")
+	src := writeTemp(t, "prog.src", "inc a halt")
 	out := filepath.Join(t.TempDir(), "prog.bin")
 	if err := run([]string{"-o", out, src}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)

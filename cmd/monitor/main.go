@@ -55,12 +55,18 @@ func run(args []string, in io.Reader, out io.Writer) error {
 // and A. It has no trailing newline: at a terminal, the user's Enter key
 // supplies it.
 func status(cpu *r8.CPU) string {
-	// Only the mnemonic is uppercased: the assembler reads "0x" but not "0X".
-	mnemonic, operand, _ := strings.Cut(cpu.NextInstruction(), " ")
-	next := strings.TrimSpace(strings.ToUpper(mnemonic) + " " + operand)
+	// Mnemonics and registers are uppercased, but numbers are not: the
+	// assembler reads "0x" but not "0X".
+	words := strings.Fields(cpu.NextInstruction())
+	for i, w := range words {
+		if !strings.HasPrefix(w, "0x") {
+			words[i] = strings.ToUpper(w)
+		}
+	}
+	next := strings.Join(words, " ")
 	label := fmt.Sprintf("next %-12q", next)
 	if cpu.Halted {
 		label = "halted"
 	}
-	return fmt.Sprintf("%-17s => %07d > %04d", label, cpu.PC, cpu.A)
+	return fmt.Sprintf("%-17s => %07d > %04d", label, cpu.PC, cpu.R[r8.A])
 }

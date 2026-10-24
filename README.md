@@ -48,9 +48,9 @@ The repository has the `r8` emulator package plus three commands for working wit
 | -------- | ------ | -------------------- | ----------------------------------- |
 | `halt`   | `0x00` |                      | stop execution                      |
 | `nop`    | `0x01` |                      | do nothing                          |
-| `ld`     | `0x10` | byte                 | load the operand into A             |
-| `inc`    | `0x30` |                      | increment A                         |
-| `dec`    | `0x40` |                      | decrement A                         |
+| `ld R, N` | `0x10` | byte                 | load the byte N into register R     |
+| `inc R`  | `0x30` |                      | increment register R                |
+| `dec R`  | `0x40` |                      | decrement register R                |
 | `bra`    | `0xF0` | signed byte or label | branch always                       |
 | `beq`    | `0xF1` | signed byte or label | branch if A is zero                 |
 | `bne`    | `0xF2` | signed byte or label | branch if A is not zero             |
@@ -58,17 +58,19 @@ The repository has the `r8` emulator package plus three commands for working wit
 
 Branch offsets count from the start of the next instruction.
 
+R is a register. Only `a`, the accumulator (register ID `0x0`), exists so far. As in the manual, `ld`, `inc` and `dec` put the register ID in the opcode's low nibble, so the opcodes shown are for `a`.
+
 ### Assembly syntax
 
 ```asm
-        ld 0x0A   ; load 10 into A
-loop:   dec       ; decrement A
-        bne loop  ; repeat until A is zero
-        halt      ; stop
+        ld a, 0x0A   ; load 10 into A
+loop:   dec a        ; decrement A
+        bne loop     ; repeat until A is zero
+        halt         ; stop
 ```
 
 * Text after `;` is a comment.
-* Mnemonics are case-insensitive. Whitespace only separates tokens, and commas separate operands with or without spaces.
+* Mnemonics and register names are case-insensitive. Whitespace only separates tokens, and commas separate operands with or without spaces.
 * As in the R8 manual, numbers must be `0x`-prefixed hex (`0x0A`). A raw branch offset is a two's complement byte, so `0xFD` means -3.
 * `name:` defines a label at the address of the next instruction. Addresses start at 0. Label names are case-sensitive.
 * A branch that names a label assembles to that label's offset. A `jmp` that names one assembles to its address.
@@ -92,7 +94,7 @@ For example, the countdown loop above is in [`program.asm`](program.asm): assemb
 ### Library
 
 ```go
-program, err := r8.Assemble("ld 0x03\nloop: dec\nbne loop\nhalt")
+program, err := r8.Assemble("ld a, 0x03\nloop: dec a\nbne loop\nhalt")
 if err != nil {
 	log.Fatal(err)
 }
@@ -103,7 +105,7 @@ if err := cpu.LoadProgram(program, 0); err != nil {
 if err := cpu.RunN(1000); err != nil { // ErrStepLimit if it never halts
 	log.Fatal(err)
 }
-fmt.Println(cpu.A) // 0
+fmt.Println(cpu.R[r8.A]) // 0
 ```
 
 `Step` runs one instruction, `Run` runs until `halt`, and `Disassemble` converts machine code back into source. See the package docs (`go doc -all .`) for details.

@@ -7,7 +7,7 @@ import (
 )
 
 func ExampleAssemble() {
-	program, err := r8.Assemble("ld 0x03\ndec\nbne 0xFD ; loop until A is zero\nhalt")
+	program, err := r8.Assemble("ld a, 0x03\ndec a\nbne 0xFD ; loop until A is zero\nhalt")
 	if err != nil {
 		panic(err)
 	}
@@ -17,8 +17,8 @@ func ExampleAssemble() {
 
 func ExampleAssemble_labels() {
 	program, err := r8.Assemble(`
-		ld 0x03
-	loop:	dec
+		ld a, 0x03
+	loop:	dec a
 		bne loop ; assembles to the offset 0xFD, or -3
 		halt`)
 	if err != nil {
@@ -31,14 +31,14 @@ func ExampleAssemble_labels() {
 func ExampleDisassemble() {
 	fmt.Println(r8.Disassemble([]byte{0x10, 0x03, 0x40, 0xF2, 0xFD, 0x00}))
 	// Output:
-	// ld 0x03
-	// dec
+	// ld a, 0x03
+	// dec a
 	// bne 0xFD ; bne -3
 	// halt
 }
 
 func ExampleCPU_RunN() {
-	program, err := r8.Assemble("ld 0xFA\ninc\nbne 0xFD\nhalt")
+	program, err := r8.Assemble("ld a, 0xFA\ninc a\nbne 0xFD\nhalt")
 	if err != nil {
 		panic(err)
 	}
@@ -49,6 +49,6 @@ func ExampleCPU_RunN() {
 	if err := cpu.RunN(1000); err != nil {
 		panic(err)
 	}
-	fmt.Println(cpu.A, cpu.Halted)
+	fmt.Println(cpu.R[r8.A], cpu.Halted)
 	// Output: 0 true
 }
