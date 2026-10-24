@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	r8 "github.com/jgrecu/go-r8"
 )
@@ -34,7 +33,7 @@ func run(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	program, err := r8.Assemble(strings.Fields(string(src)))
+	program, err := r8.Assemble(string(src))
 	if err != nil {
 		return fmt.Errorf("%s: %w", flags.Arg(0), err)
 	}
