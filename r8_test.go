@@ -3,15 +3,21 @@ package r8_test
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jgrecu/go-r8"
 )
 
+// assemble assembles tokens written on a single source line.
+func assemble(tokens ...string) ([]byte, error) {
+	return r8.Assemble(strings.Join(tokens, " "))
+}
+
 // newTestCPU returns a CPU with the program assembled from tokens loaded into memory.
 func newTestCPU(t testing.TB, tokens ...string) *r8.CPU {
 	t.Helper()
-	program, err := r8.Assemble(tokens)
+	program, err := assemble(tokens...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,9 +437,53 @@ func TestAssembleErrors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := r8.Assemble(c.tokens)
+			_, err := assemble(c.tokens...)
 			if !errors.Is(err, c.wantErr) {
 				t.Errorf("Assemble(%v): want %v, got %v", c.tokens, c.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestAssembleSource(t *testing.T) {
+	t.Parallel()
+	src := `; count down from 3
+ld 3      ; A = 3
+dec
+bne -3    ; back to dec
+
+halt`
+	got, err := r8.Assemble(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt}
+	if !bytes.Equal(got, want) {
+		t.Errorf("want %v, got %v", want, got)
+	}
+}
+
+func TestAssembleErrorReportsLineNumber(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		src     string
+		wantErr error
+		wantMsg string
+	}{
+		{"unknown instruction", "nop\n\nfoo", r8.ErrUnknownInstruction, "line 3:"},
+		{"bad operand", "; comment\nld 300", r8.ErrBadOperand, "line 2:"},
+		{"operand must be on the same line", "ld\n5", r8.ErrMissingOperand, "line 1:"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := r8.Assemble(c.src)
+			if !errors.Is(err, c.wantErr) {
+				t.Fatalf("want %v, got %v", c.wantErr, err)
+			}
+			if !strings.HasPrefix(err.Error(), c.wantMsg) {
+				t.Errorf("want error starting %q, got %q", c.wantMsg, err)
 			}
 		})
 	}
@@ -478,7 +528,7 @@ func TestAssembleDisassemble(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			asm, err := r8.Assemble(c.inTokens)
+			asm, err := assemble(c.inTokens...)
 			if err != nil && !c.expectError {
 				t.Fatal(err)
 			}

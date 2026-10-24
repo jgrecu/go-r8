@@ -291,14 +291,28 @@ func Disassemble(code []byte) string {
 	return strings.Join(lines, "\n")
 }
 
-// Assemble converts source tokens into machine code. Mnemonics are
-// case-insensitive, and operands may be written in any base accepted by
-// strconv.ParseUint with base 0. Branch offsets are signed (-128 to 127) and
-// parsed with strconv.ParseInt instead. Multi-byte operands are stored
-// little-endian. Errors wrap ErrUnknownInstruction, ErrBadOperand, or
-// ErrMissingOperand.
-func Assemble(tokens []string) ([]byte, error) {
+// Assemble converts source text into machine code. Each line holds zero or
+// more instructions, each followed by its operand on the same line; text
+// after ";" is a comment. Mnemonics are case-insensitive, and operands may be
+// written in any base accepted by strconv.ParseUint with base 0. Branch
+// offsets are signed (-128 to 127) and parsed with strconv.ParseInt instead.
+// Multi-byte operands are stored little-endian. Errors start with the line
+// number and wrap ErrUnknownInstruction, ErrBadOperand, or ErrMissingOperand.
+func Assemble(src string) ([]byte, error) {
 	var program []byte
+	for n, line := range strings.Split(src, "\n") {
+		code, _, _ := strings.Cut(line, ";")
+		var err error
+		program, err = assembleLine(program, strings.Fields(code))
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", n+1, err)
+		}
+	}
+	return program, nil
+}
+
+// assembleLine appends the machine code for one line's tokens to program.
+func assembleLine(program []byte, tokens []string) ([]byte, error) {
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
 		op, ok := opcodes[strings.ToLower(tok)]
