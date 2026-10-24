@@ -13,7 +13,7 @@ import (
 	r8 "github.com/jgrecu/go-r8"
 )
 
-const header = "Next Oper            PC   > A"
+const header = "Next Oper            PC      > A"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
@@ -59,5 +59,5 @@ func status(cpu *r8.CPU) string {
 	if cpu.Halted {
 		label = "halted"
 	}
-	return fmt.Sprintf("%-17s => %04d > %07d", label, cpu.PC, cpu.A)
+	return fmt.Sprintf("%-17s => %07d > %04d", label, cpu.PC, cpu.A)
 }
