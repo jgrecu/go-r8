@@ -195,23 +195,18 @@ func (cpu *CPU) readUint16(addr uint16) uint16 {
 // String returns a one-line view of the next instruction, PC, and A, as
 // shown by the monitor.
 func (cpu *CPU) String() string {
-	return fmt.Sprintf("next %-12q => %04d > %07d", strings.ToUpper(disassembleOp(*cpu)), cpu.PC, cpu.A)
+	return fmt.Sprintf("next %-12q => %04d > %07d", strings.ToUpper(disassembleOp(cpu)), cpu.PC, cpu.A)
 }
 
 // disassembleOp returns the source form of the instruction at cpu.PC, such
 // as "ld 5" or "halt", for the monitor's status line. It returns "???" if the
-// opcode is unknown.
-func disassembleOp(cpu CPU) string {
-	b := cpu.Memory[cpu.PC]
-	inst, ok := instructions[b]
-	if !ok {
-		return "???"
-
+// opcode is unknown. Operand bytes wrap around the end of memory, as in Step.
+func disassembleOp(cpu *CPU) string {
+	code := []byte{cpu.Memory[cpu.PC]}
+	for i := range instructions[code[0]].operandSize {
+		code = append(code, cpu.Memory[cpu.PC+uint16(i+1)])
 	}
-	if inst.operandSize == 0 {
-		return inst.mnemonic
-	}
-	return Disassemble(cpu.Memory[cpu.PC : cpu.PC+uint16(inst.operandSize+1)])
+	return Disassemble(code)
 }
 
 // Disassemble converts machine code into one line of source per instruction.

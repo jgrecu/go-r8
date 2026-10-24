@@ -3,6 +3,7 @@ package r8_test
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jgrecu/go-r8"
@@ -322,6 +323,33 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 			cpu.Step()
 			if cpu.PC != c.wantPC {
 				t.Errorf("want PC == %#04x, got %#04x", c.wantPC, cpu.PC)
+			}
+		})
+	}
+}
+
+func TestStringDecodesOperandAcrossEndOfMemory(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		pc   uint16
+		mem  map[uint16]byte
+		want string
+	}{
+		{"ld at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpLd, 0x0000: 5}, `"LD 5"`},
+		{"jmp at second-last byte", 0xFFFE, map[uint16]byte{0xFFFE: r8.OpJmp, 0xFFFF: 0x34, 0x0000: 0x12}, `"JMP 0X1234"`},
+		{"jmp at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpJmp, 0x0000: 0x34, 0x0001: 0x12}, `"JMP 0X1234"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cpu := r8.NewCPU()
+			cpu.PC = c.pc
+			for addr, b := range c.mem {
+				cpu.Memory[addr] = b
+			}
+			if got := cpu.String(); !strings.Contains(got, c.want) {
+				t.Errorf("String() = %q, want it to contain %s", got, c.want)
 			}
 		})
 	}
