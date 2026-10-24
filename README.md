@@ -103,7 +103,7 @@ if err := cpu.LoadProgram(program, 0); err != nil {
 if err := cpu.RunN(1000); err != nil { // ErrStepLimit if it never halts
 	log.Fatal(err)
 }
-fmt.Println(cpu.A) // 0
+fmt.Println(cpu.R[r8.A]) // 0
 ```
 
 `Step` runs one instruction, `Run` runs until `halt`, and `Disassemble` converts machine code back into source. See the package docs (`go doc -all .`) for details.

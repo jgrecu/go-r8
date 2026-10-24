@@ -68,11 +68,44 @@ func TestNewInitialisesCPU(t *testing.T) {
 		t.Errorf("after New, want Memory[0] == 0, got %d", got)
 	}
 
-	if cpu.A != 0 {
-		t.Errorf("after New, want a == 0, got %d", cpu.A)
+	for r, v := range cpu.R {
+		if v != 0 {
+			t.Errorf("after New, want %v == 0, got %d", r8.Register(r), v)
+		}
 	}
 	if cpu.Halted {
 		t.Error("after New, want Halted == false, got true")
+	}
+}
+
+// TestRegisterIDs checks the register IDs against the R8 manual's register ID
+// encoding table.
+func TestRegisterIDs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		reg  r8.Register
+		id   byte
+		name string
+	}{
+		{r8.A, 0x0, "a"},
+	}
+	if len(cases) != r8.NumRegisters {
+		t.Fatalf("want %d registers, got %d", len(cases), r8.NumRegisters)
+	}
+	for _, c := range cases {
+		if byte(c.reg) != c.id {
+			t.Errorf("%s: want ID 0x%X, got 0x%X", c.name, c.id, byte(c.reg))
+		}
+		if got := c.reg.String(); got != c.name {
+			t.Errorf("ID 0x%X: want name %q, got %q", c.id, c.name, got)
+		}
+	}
+}
+
+func TestRegisterStringUnknownID(t *testing.T) {
+	t.Parallel()
+	if got, want := r8.Register(0xC).String(), "Register(12)"; got != want {
+		t.Errorf("want %q, got %q", want, got)
 	}
 }
 
@@ -131,8 +164,8 @@ func TestStepDoesNothingWhenHalted(t *testing.T) {
 	if cpu.PC != 0 {
 		t.Errorf("want PC == 0, got %d", cpu.PC)
 	}
-	if cpu.A != 0 {
-		t.Errorf("want A == 0, got %d", cpu.A)
+	if cpu.R[r8.A] != 0 {
+		t.Errorf("want A == 0, got %d", cpu.R[r8.A])
 	}
 }
 
@@ -153,8 +186,8 @@ func TestRunNReturnsErrStepLimitWhenProgramDoesNotHalt(t *testing.T) {
 	if !errors.Is(err, r8.ErrStepLimit) {
 		t.Fatalf("want ErrStepLimit, got %v", err)
 	}
-	if cpu.A != 5 {
-		t.Errorf("want A == 5 after 10 steps, got %d", cpu.A)
+	if cpu.R[r8.A] != 5 {
+		t.Errorf("want A == 5 after 10 steps, got %d", cpu.R[r8.A])
 	}
 }
 
@@ -164,8 +197,8 @@ func TestRunNStopsAtHalt(t *testing.T) {
 	if err := cpu.RunN(10); err != nil {
 		t.Fatal(err)
 	}
-	if !cpu.Halted || cpu.A != 1 {
-		t.Errorf("want Halted with A == 1, got Halted=%v A=%d", cpu.Halted, cpu.A)
+	if !cpu.Halted || cpu.R[r8.A] != 1 {
+		t.Errorf("want Halted with A == 1, got Halted=%v A=%d", cpu.Halted, cpu.R[r8.A])
 	}
 }
 
@@ -217,7 +250,7 @@ func TestCpuRun(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			cpu := newTestCPU(t, c.tokens...)
-			cpu.A = c.initA
+			cpu.R[r8.A] = c.initA
 			cpu.PC = c.initPC
 			if err := cpu.Run(); err != nil {
 				t.Fatal(err)
@@ -225,8 +258,8 @@ func TestCpuRun(t *testing.T) {
 			if !cpu.Halted {
 				t.Error("want Halted == true after Run, got false")
 			}
-			if cpu.A != c.wantA {
-				t.Errorf("want A == %d, got %d", c.wantA, cpu.A)
+			if cpu.R[r8.A] != c.wantA {
+				t.Errorf("want A == %d, got %d", c.wantA, cpu.R[r8.A])
 			}
 			if cpu.PC != c.wantPC {
 				t.Errorf("want PC == %d, got %d", c.wantPC, cpu.PC)
@@ -308,8 +341,8 @@ func TestLoadProgramAtAddressRunsFromThatAddress(t *testing.T) {
 	if err := cpu.Run(); err != nil {
 		t.Fatal(err)
 	}
-	if cpu.A != 7 {
-		t.Errorf("want A 7, got %d", cpu.A)
+	if cpu.R[r8.A] != 7 {
+		t.Errorf("want A 7, got %d", cpu.R[r8.A])
 	}
 	if cpu.PC != 0x0103 {
 		t.Errorf("want PC 0x0103, got %#04x", cpu.PC)
@@ -384,7 +417,7 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 			t.Parallel()
 			cpu := r8.NewCPU()
 			cpu.PC = c.pc
-			cpu.A = c.a
+			cpu.R[r8.A] = c.a
 			cpu.Memory[c.pc] = c.op
 			cpu.Memory[c.pc+1] = c.offset
 			mustStep(t, cpu)
@@ -431,8 +464,8 @@ func TestJmpInfiniteLoop(t *testing.T) {
 	for range 1 + 3*2 { // ld, then 3 iterations of inc+jmp
 		mustStep(t, cpu)
 	}
-	if cpu.A != 13 {
-		t.Errorf("want A == 13, got %d", cpu.A)
+	if cpu.R[r8.A] != 13 {
+		t.Errorf("want A == 13, got %d", cpu.R[r8.A])
 	}
 	if cpu.PC != 2 {
 		t.Errorf("want PC == 2, got %d", cpu.PC)
@@ -627,8 +660,8 @@ func TestAssembleLabelsRun(t *testing.T) {
 	if err := cpu.RunN(100); err != nil {
 		t.Fatal(err)
 	}
-	if !cpu.Halted || cpu.A != 0 {
-		t.Errorf("want Halted with A == 0, got Halted=%v A=%d", cpu.Halted, cpu.A)
+	if !cpu.Halted || cpu.R[r8.A] != 0 {
+		t.Errorf("want Halted with A == 0, got Halted=%v A=%d", cpu.Halted, cpu.R[r8.A])
 	}
 }
 

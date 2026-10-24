@@ -18,8 +18,9 @@ import (
 type CPU struct {
 	// PC is the program counter: the address of the next byte to execute.
 	PC uint16
-	// A is the accumulator register.
-	A byte
+	// R holds the 8-bit general-purpose registers, indexed by Register.
+	// R[A] is the accumulator.
+	R [NumRegisters]byte
 	// Memory is the 64KB CPU's addressable memory.
 	Memory [MemSize]byte
 	// Halted is true once a HALT instruction has executed.
@@ -38,6 +39,28 @@ const (
 	OpBeq  byte = 0xF1 // branch by the following signed byte if A is zero
 	OpBne  byte = 0xF2 // branch by the following signed byte if A is not zero
 )
+
+// Register is a 4-bit register ID, as encoded in an instruction's register
+// specifier operand.
+type Register byte
+
+// The 8-bit general-purpose registers. A is the accumulator.
+const (
+	A Register = iota
+
+	// NumRegisters is the number of general-purpose registers.
+	NumRegisters = iota
+)
+
+var registerNames = [NumRegisters]string{"a"}
+
+// String returns the register's lowercase name, such as "a".
+func (r Register) String() string {
+	if int(r) >= NumRegisters {
+		return fmt.Sprintf("Register(%d)", byte(r))
+	}
+	return registerNames[r]
+}
 
 // MemSize is the size of the CPU's memory in bytes.
 const MemSize = 65536
@@ -190,13 +213,13 @@ func (inst *instruction) source(v uint16) string {
 var instructions = [256]*instruction{
 	OpHalt: {"halt", none, func(cpu *CPU, _ uint16) { cpu.Halted = true }},
 	OpNop:  {"nop", none, func(*CPU, uint16) {}},
-	OpInc:  {"inc", none, func(cpu *CPU, _ uint16) { cpu.A++ }},
-	OpDec:  {"dec", none, func(cpu *CPU, _ uint16) { cpu.A-- }},
-	OpLd:   {"ld", imm8, func(cpu *CPU, v uint16) { cpu.A = byte(v) }},
+	OpInc:  {"inc", none, func(cpu *CPU, _ uint16) { cpu.R[A]++ }},
+	OpDec:  {"dec", none, func(cpu *CPU, _ uint16) { cpu.R[A]-- }},
+	OpLd:   {"ld", imm8, func(cpu *CPU, v uint16) { cpu.R[A] = byte(v) }},
 	OpJmp:  {"jmp", addr16, func(cpu *CPU, addr uint16) { cpu.PC = addr }},
 	OpBra:  {"bra", rel8, func(cpu *CPU, off uint16) { cpu.branchIf(true, off) }},
-	OpBeq:  {"beq", rel8, func(cpu *CPU, off uint16) { cpu.branchIf(cpu.A == 0, off) }},
-	OpBne:  {"bne", rel8, func(cpu *CPU, off uint16) { cpu.branchIf(cpu.A != 0, off) }},
+	OpBeq:  {"beq", rel8, func(cpu *CPU, off uint16) { cpu.branchIf(cpu.R[A] == 0, off) }},
+	OpBne:  {"bne", rel8, func(cpu *CPU, off uint16) { cpu.branchIf(cpu.R[A] != 0, off) }},
 }
 
 var opcodes = func() map[string]byte {

@@ -62,5 +62,5 @@ func status(cpu *r8.CPU) string {
 	if cpu.Halted {
 		label = "halted"
 	}
-	return fmt.Sprintf("%-17s => %07d > %04d", label, cpu.PC, cpu.A)
+	return fmt.Sprintf("%-17s => %07d > %04d", label, cpu.PC, cpu.R[r8.A])
 }

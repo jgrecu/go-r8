@@ -49,6 +49,6 @@ func ExampleCPU_RunN() {
 	if err := cpu.RunN(1000); err != nil {
 		panic(err)
 	}
-	fmt.Println(cpu.A, cpu.Halted)
+	fmt.Println(cpu.R[r8.A], cpu.Halted)
 	// Output: 0 true
 }
