@@ -3,7 +3,6 @@ package r8_test
 import (
 	"bytes"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/jgrecu/go-r8"
@@ -360,7 +359,7 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 	}
 }
 
-func TestStringDecodesOperandAcrossEndOfMemory(t *testing.T) {
+func TestNextInstruction(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
@@ -368,9 +367,12 @@ func TestStringDecodesOperandAcrossEndOfMemory(t *testing.T) {
 		mem  map[uint16]byte
 		want string
 	}{
-		{"ld at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpLd, 0x0000: 5}, `"LD 5"`},
-		{"jmp at second-last byte", 0xFFFE, map[uint16]byte{0xFFFE: r8.OpJmp, 0xFFFF: 0x34, 0x0000: 0x12}, `"JMP 0X1234"`},
-		{"jmp at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpJmp, 0x0000: 0x34, 0x0001: 0x12}, `"JMP 0X1234"`},
+		{"no operand", 0x0000, map[uint16]byte{0x0000: r8.OpInc}, "inc"},
+		{"unknown opcode", 0x0000, map[uint16]byte{0x0000: 0xFF}, "???"},
+		{"ld at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpLd, 0x0000: 5}, "ld 5"},
+		{"jmp at second-last byte", 0xFFFE, map[uint16]byte{0xFFFE: r8.OpJmp, 0xFFFF: 0x34, 0x0000: 0x12}, "jmp 0x1234"},
+		{"jmp at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpJmp, 0x0000: 0x34, 0x0001: 0x12}, "jmp 0x1234"},
+		{"bne negative offset", 0x0010, map[uint16]byte{0x0010: r8.OpBne, 0x0011: 0xFD}, "bne -3"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -380,8 +382,8 @@ func TestStringDecodesOperandAcrossEndOfMemory(t *testing.T) {
 			for addr, b := range c.mem {
 				cpu.Memory[addr] = b
 			}
-			if got := cpu.String(); !strings.Contains(got, c.want) {
-				t.Errorf("String() = %q, want it to contain %s", got, c.want)
+			if got := cpu.NextInstruction(); got != c.want {
+				t.Errorf("NextInstruction() = %q, want %q", got, c.want)
 			}
 		})
 	}
