@@ -35,3 +35,84 @@ The test is in the file [`r8_test.go`](r8_test.go), and the `NewCPU` function is
 That's a great start! For the next challenge, read the tutorial:
 
 * [Welcome to the machine: emulating a CPU](https://bitfieldconsulting.com/posts/welcome-to-machine)
+
+## Usage
+
+[![CI](https://github.com/jgrecu/go-r8/actions/workflows/ci.yml/badge.svg)](https://github.com/jgrecu/go-r8/actions/workflows/ci.yml)
+
+The repository has the `r8` emulator package plus three commands for working with R8 programs.
+
+### Instruction set
+
+| Mnemonic | Opcode | Operand              | Effect                              |
+| -------- | ------ | -------------------- | ----------------------------------- |
+| `halt`   | `0x00` |                      | stop execution                      |
+| `nop`    | `0x01` |                      | do nothing                          |
+| `ld`     | `0x10` | byte                 | load the operand into A             |
+| `inc`    | `0x30` |                      | increment A                         |
+| `dec`    | `0x40` |                      | decrement A                         |
+| `bra`    | `0xF0` | signed byte or label | branch always                       |
+| `beq`    | `0xF1` | signed byte or label | branch if A is zero                 |
+| `bne`    | `0xF2` | signed byte or label | branch if A is not zero             |
+| `jmp`    | `0xF7` | address or label     | jump to the 16-bit address          |
+
+Branch offsets count from the start of the next instruction.
+
+### Assembly syntax
+
+```asm
+        ld 10     ; load 10 into A
+loop:   dec       ; decrement A
+        bne loop  ; repeat until A is zero
+        halt      ; stop
+```
+
+* Text after `;` is a comment.
+* Mnemonics are case-insensitive. Numbers can be decimal, hex (`0x0A`), octal (`0o12`) or binary (`0b1010`).
+* `name:` defines a label at the address of the next instruction. Addresses start at 0. Label names are case-sensitive.
+* A branch that names a label assembles to that label's offset. A `jmp` that names one assembles to its address.
+* Each error message starts with the line number, for example `line 3: bne: bad operand "lop": undefined label`.
+
+### Commands
+
+```sh
+# Assemble source into machine code (writes program.bin by default; "-o -" writes to stdout).
+go run ./cmd/assembler [-o program.bin] program.asm
+
+# Disassemble machine code back into source (writes program.src by default).
+go run ./cmd/disassembler [-o program.src] program.bin
+
+# Load a program at address 0 and step one instruction each time you press Enter.
+go run ./cmd/monitor program.bin
+```
+
+For example, save the countdown loop above as `program.asm`, then assemble, disassemble and step through it. In the disassembler's output, the label shows up as the raw offset `bne -3`. Files named `program.*` are gitignored.
+
+### Library
+
+```go
+program, err := r8.Assemble("ld 3\nloop: dec\nbne loop\nhalt")
+if err != nil {
+	log.Fatal(err)
+}
+cpu := r8.NewCPU()
+if err := cpu.LoadProgram(program, 0); err != nil {
+	log.Fatal(err)
+}
+if err := cpu.RunN(1000); err != nil { // ErrStepLimit if it never halts
+	log.Fatal(err)
+}
+fmt.Println(cpu.A) // 0
+```
+
+`Step` runs one instruction, `Run` runs until `halt`, and `Disassemble` converts machine code back into source. See the package docs (`go doc -all .`) for details.
+
+### Development
+
+```sh
+gofmt -l .
+go vet ./...
+go test -race ./...
+```
+
+CI runs these same checks on every push to `main` and on every pull request.
