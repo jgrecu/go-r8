@@ -27,11 +27,26 @@ func TestRunStepsOncePerInputLineAndShowsFinalState(t *testing.T) {
 	if err := run([]string{bin}, strings.NewReader("\n\n\n\n\n"), &out); err != nil {
 		t.Fatal(err)
 	}
-	want := header + "\n" +
-		`next "LD A, 0x07" => 0000000 > 0000` +
-		`next "INC A"      => 0000002 > 0007` +
-		`next "HALT"       => 0000003 > 0008` +
-		`halted            => 0000004 > 0008` + "\n"
+	want := `CPU state: PC: 0000  A: 00  PS: --------  Next op: LD A, 0x07` +
+		`CPU state: PC: 0002  A: 07  PS: --------  Next op: INC A` +
+		`CPU state: PC: 0003  A: 08  PS: --------  Next op: HALT` +
+		`CPU state: PC: 0004  A: 08  PS: --------  Next op: halted` + "\n"
+	if out.String() != want {
+		t.Errorf("want:\n%s\ngot:\n%s", want, out.String())
+	}
+}
+
+func TestRunShowsFlags(t *testing.T) {
+	t.Parallel()
+	bin := writeProgram(t, []byte{r8.OpLdRN, 0x00, r8.OpLdRN, 0x80, r8.OpHalt})
+	var out bytes.Buffer
+	if err := run([]string{bin}, strings.NewReader("\n\n\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	want := `CPU state: PC: 0000  A: 00  PS: --------  Next op: LD A, 0x00` +
+		`CPU state: PC: 0002  A: 00  PS: ------Z-  Next op: LD A, 0x80` +
+		`CPU state: PC: 0004  A: 80  PS: N-------  Next op: HALT` +
+		`CPU state: PC: 0005  A: 80  PS: N-------  Next op: halted` + "\n"
 	if out.String() != want {
 		t.Errorf("want:\n%s\ngot:\n%s", want, out.String())
 	}
@@ -44,7 +59,7 @@ func TestRunStopsWhenInputEnds(t *testing.T) {
 	if err := run([]string{bin}, strings.NewReader("\n"), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `next "INC A"      => 0000001 > 0001`) {
+	if !strings.Contains(out.String(), `CPU state: PC: 0001  A: 01  PS: --------  Next op: INC A`) {
 		t.Errorf("want state after one step, got:\n%s", out.String())
 	}
 }

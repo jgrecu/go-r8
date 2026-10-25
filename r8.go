@@ -21,6 +21,8 @@ type CPU struct {
 	// R holds the 8-bit general-purpose registers, indexed by Register.
 	// R[A] is the accumulator.
 	R [NumRegisters]byte
+	// PS is the processor status register, holding the flags.
+	PS Flags
 	// Memory is the 64KB CPU's addressable memory.
 	Memory [MemSize]byte
 	// Halted is true once a HALT instruction has executed.
@@ -39,9 +41,34 @@ const (
 	OpDecR byte = 0x40 // dec R: decrement R
 	OpJmp  byte = 0xF7 // jump to the following 16-bit little-endian address
 	OpBra  byte = 0xF0 // branch by the following signed byte, relative to the next instruction
-	OpBeq  byte = 0xF1 // branch by the following signed byte if A is zero
-	OpBne  byte = 0xF2 // branch by the following signed byte if A is not zero
+	OpBeq  byte = 0xF1 // branch by the following signed byte if the Z flag is set
+	OpBne  byte = 0xF2 // branch by the following signed byte if the Z flag is clear
 )
+
+// Flags is the contents of the PS status register, one bit per flag.
+type Flags byte
+
+// The status flags, as laid out in the R8 manual's status register.
+const (
+	FlagZ Flags = 1 << 1 // zero: the last result was zero
+	FlagN Flags = 1 << 7 // negative: bit 7 of the last result was set
+)
+
+// flagLetters names the PS bits from bit 7 down to bit 0. Bits 3-5 are
+// reserved.
+const flagLetters = "NV---IZC"
+
+// String returns all eight PS bits, high bit first, as the letter of each set
+// flag or '-' for a clear or reserved bit, as in "N-----Z-".
+func (f Flags) String() string {
+	b := []byte(flagLetters)
+	for i := range b {
+		if f&(0x80>>i) == 0 {
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
 
 // Register is a 4-bit register ID, as encoded in an instruction's register
 // specifier operand.
@@ -257,13 +284,25 @@ var instructions = func() [256]*instruction {
 // and moved PC to the next instruction.
 func (cpu *CPU) halt(Register, uint16)       { cpu.Halted = true }
 func (cpu *CPU) nop(Register, uint16)        {}
-func (cpu *CPU) ld(r Register, v uint16)     { cpu.R[r] = byte(v) }
-func (cpu *CPU) inc(r Register, _ uint16)    { cpu.R[r]++ }
-func (cpu *CPU) dec(r Register, _ uint16)    { cpu.R[r]-- }
+func (cpu *CPU) ld(r Register, v uint16)     { cpu.R[r] = byte(v); cpu.setZN(cpu.R[r]) }
+func (cpu *CPU) inc(r Register, _ uint16)    { cpu.R[r]++; cpu.setZN(cpu.R[r]) }
+func (cpu *CPU) dec(r Register, _ uint16)    { cpu.R[r]--; cpu.setZN(cpu.R[r]) }
 func (cpu *CPU) jmp(_ Register, addr uint16) { cpu.PC = addr }
 func (cpu *CPU) bra(_ Register, off uint16)  { cpu.branchIf(true, off) }
-func (cpu *CPU) beq(_ Register, off uint16)  { cpu.branchIf(cpu.R[A] == 0, off) }
-func (cpu *CPU) bne(_ Register, off uint16)  { cpu.branchIf(cpu.R[A] != 0, off) }
+func (cpu *CPU) beq(_ Register, off uint16)  { cpu.branchIf(cpu.PS&FlagZ != 0, off) }
+func (cpu *CPU) bne(_ Register, off uint16)  { cpu.branchIf(cpu.PS&FlagZ == 0, off) }
+
+// setZN sets the Z and N flags from v, the result of an instruction, leaving
+// the other flags unchanged.
+func (cpu *CPU) setZN(v byte) {
+	cpu.PS &^= FlagZ | FlagN
+	if v == 0 {
+		cpu.PS |= FlagZ
+	}
+	if v&0x80 != 0 {
+		cpu.PS |= FlagN
+	}
+}
 
 // opcodes maps each mnemonic to its opcode. For an instruction that encodes
 // a register, it is the base opcode, to be combined with the register's ID.
@@ -291,10 +330,12 @@ func NewCPU() *CPU {
 }
 
 // Reset puts the CPU into its power-on state: PC is loaded from the reset
-// vector at ResetVector, and the CPU is no longer halted. Registers and memory
-// are left unchanged.
+// vector at ResetVector, the registers and flags are zeroed, and the CPU is no
+// longer halted. Memory is left unchanged.
 func (cpu *CPU) Reset() {
 	cpu.PC = binary.LittleEndian.Uint16(cpu.Memory[ResetVector:])
+	cpu.R = [NumRegisters]byte{}
+	cpu.PS = 0
 	cpu.Halted = false
 }
 
