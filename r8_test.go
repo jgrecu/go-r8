@@ -38,11 +38,45 @@ func mustStep(t testing.TB, cpu *r8.CPU) {
 	}
 }
 
+// cpuWithProgram returns a CPU with program loaded at addr.
+func cpuWithProgram(t testing.TB, program []byte, addr uint16) *r8.CPU {
+	t.Helper()
+	cpu := r8.NewCPU()
+	if err := cpu.LoadProgram(program, addr); err != nil {
+		t.Fatal(err)
+	}
+	return cpu
+}
+
+// cpuState is the observable state of a CPU: its registers, flags, and
+// halt flag, along with the program counter.
+type cpuState struct {
+	pc     uint16
+	a      byte
+	ps     r8.Flags
+	halted bool
+}
+
+// assertState fails the test unless cpu's PC, accumulator, flags, and
+// halted flag all match want.
+func assertState(t testing.TB, cpu *r8.CPU, want cpuState) {
+	t.Helper()
+	got := cpuState{pc: cpu.PC, a: cpu.R[r8.A], ps: cpu.PS, halted: cpu.Halted}
+	if got != want {
+		t.Errorf("CPU state:\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
 // FuzzDisassembleAssemble checks that any machine code that disassembles
 // cleanly assembles back to exactly the same bytes.
 func FuzzDisassembleAssemble(f *testing.F) {
 	f.Add([]byte{r8.OpLdRN, 3, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt})
 	f.Add([]byte{r8.OpJmp, 0x34, 0x12, r8.OpBra, 0x80})
+	// Truncated operands and unknown opcodes.
+	f.Add([]byte{r8.OpHalt, 0xFF})
+	f.Add([]byte{r8.OpLdRN})
+	f.Add([]byte{r8.OpJmp, 0x34})
+	f.Add([]byte{0xFF, r8.OpNop, 0xFF})
 	f.Fuzz(func(t *testing.T, code []byte) {
 		src := r8.Disassemble(code)
 		if strings.Contains(src, "???") {
@@ -80,6 +114,18 @@ func TestNewInitialisesCPU(t *testing.T) {
 	if cpu.PS != 0 {
 		t.Errorf("after New, want PS == 0, got %#02x", cpu.PS)
 	}
+}
+
+// TestZeroValueCPUIsUsable pins the doc comment's promise that the zero
+// value of CPU is a CPU in its initial state, ready to use without NewCPU.
+func TestZeroValueCPUIsUsable(t *testing.T) {
+	t.Parallel()
+	var cpu r8.CPU
+	cpu.Memory[0] = r8.OpHalt
+	if err := cpu.Step(); err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, &cpu, cpuState{pc: 1, a: 0, ps: 0, halted: true})
 }
 
 // TestFlagBits checks the flag bits against the R8 manual's status register
@@ -327,6 +373,39 @@ func TestStepReturnsIllegalInstructionErrorOnUnknownOpcode(t *testing.T) {
 	}
 }
 
+// TestIllegalInstructionErrorMessage checks the exact error text and that
+// PC advances past the bad opcode, so Run can make progress.
+func TestIllegalInstructionErrorMessage(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		pc     uint16
+		opcode byte
+		want   string
+	}{
+		{"at the start of memory", 0x0000, 0xFF, "illegal instruction: 0xFF at PC=0x0000"},
+		{"at a nonzero address", 0x1234, 0xFE, "illegal instruction: 0xFE at PC=0x1234"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cpu := r8.NewCPU()
+			cpu.PC = c.pc
+			cpu.Memory[c.pc] = c.opcode
+			err := cpu.Step()
+			if err == nil {
+				t.Fatal("want an error, got nil")
+			}
+			if got := err.Error(); got != c.want {
+				t.Errorf("want %q, got %q", c.want, got)
+			}
+			if cpu.PC != c.pc+1 {
+				t.Errorf("want PC == %#04x, got %#04x", c.pc+1, cpu.PC)
+			}
+		})
+	}
+}
+
 func TestStepSetsHaltedOnHalt(t *testing.T) {
 	t.Parallel()
 	cpu := newTestCPU(t, "HALT")
@@ -395,6 +474,69 @@ func TestRunNReturnsIllegalInstructionError(t *testing.T) {
 	}
 }
 
+// TestRunNBoundaries pins RunN's behaviour at the edges of its step limit.
+func TestRunNBoundaries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero steps on a running cpu", func(t *testing.T) {
+		t.Parallel()
+		cpu := newTestCPU(t, "INC", "A")
+		err := cpu.RunN(0)
+		if !errors.Is(err, r8.ErrStepLimit) {
+			t.Fatalf("want ErrStepLimit, got %v", err)
+		}
+		if got, want := err.Error(), "step limit reached: 0"; got != want {
+			t.Errorf("want %q, got %q", want, got)
+		}
+		assertState(t, cpu, cpuState{pc: 0, a: 0, ps: 0, halted: false})
+	})
+
+	t.Run("zero steps on a halted cpu", func(t *testing.T) {
+		t.Parallel()
+		cpu := newTestCPU(t, "HALT")
+		mustStep(t, cpu)
+		if err := cpu.RunN(0); err != nil {
+			t.Errorf("want nil error, got %v", err)
+		}
+	})
+
+	t.Run("negative limit", func(t *testing.T) {
+		t.Parallel()
+		cpu := newTestCPU(t, "INC", "A")
+		err := cpu.RunN(-1)
+		if !errors.Is(err, r8.ErrStepLimit) {
+			t.Fatalf("want ErrStepLimit, got %v", err)
+		}
+		if got, want := err.Error(), "step limit reached: -1"; got != want {
+			t.Errorf("want %q, got %q", want, got)
+		}
+		assertState(t, cpu, cpuState{pc: 0, a: 0, ps: 0, halted: false})
+	})
+
+	// inc a; halt needs exactly two steps.
+	t.Run("program needing exactly two steps", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name    string
+			n       int
+			wantErr error
+		}{
+			{"one step short", 1, r8.ErrStepLimit},
+			{"exactly enough", 2, nil},
+			{"one step spare", 3, nil},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				t.Parallel()
+				cpu := newTestCPU(t, "INC", "A", "HALT")
+				if err := cpu.RunN(c.n); !errors.Is(err, c.wantErr) {
+					t.Errorf("RunN(%d): want %v, got %v", c.n, c.wantErr, err)
+				}
+			})
+		}
+	})
+}
+
 func TestCpuRun(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -449,6 +591,23 @@ func TestCpuRun(t *testing.T) {
 				t.Errorf("want PC == %d, got %d", c.wantPC, cpu.PC)
 			}
 		})
+	}
+}
+
+// TestRunOnHaltedCPU checks that Run on an already-halted CPU returns nil
+// and leaves the state unchanged.
+func TestRunOnHaltedCPU(t *testing.T) {
+	t.Parallel()
+	cpu := newTestCPU(t, "INC", "A", "HALT")
+	if err := cpu.Run(); err != nil {
+		t.Fatal(err)
+	}
+	before := *cpu
+	if err := cpu.Run(); err != nil {
+		t.Fatalf("want nil error running a halted cpu, got %v", err)
+	}
+	if *cpu != before {
+		t.Error("want CPU state unchanged after Run on a halted cpu")
 	}
 }
 
@@ -563,6 +722,67 @@ func TestLoadProgramClearsHalted(t *testing.T) {
 	}
 }
 
+// TestLoadProgramEmptyProgram checks that loading an empty program still
+// points the reset vector at addr and resets the CPU, without touching
+// memory.
+func TestLoadProgramEmptyProgram(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		program []byte
+	}{
+		{"nil program", nil},
+		{"empty program", []byte{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cpu := r8.NewCPU()
+			cpu.Memory[0x0100] = 0x99
+			cpu.PC = 0x1234
+			cpu.Halted = true
+			if err := cpu.LoadProgram(c.program, 0x0100); err != nil {
+				t.Fatal(err)
+			}
+			lo, hi := cpu.Memory[r8.ResetVector], cpu.Memory[r8.ResetVector+1]
+			if lo != 0x00 || hi != 0x01 {
+				t.Errorf("want reset vector bytes 00 01, got %02X %02X", lo, hi)
+			}
+			if cpu.Memory[0x0100] != 0x99 {
+				t.Errorf("want stale byte at 0x0100 untouched, got %#02x", cpu.Memory[0x0100])
+			}
+			assertState(t, cpu, cpuState{pc: 0x0100, a: 0, ps: 0, halted: false})
+		})
+	}
+}
+
+// TestLoadProgramOverwritesStaleBytes pins the current semantics of
+// LoadProgram: it copies the new program over the old one without clearing
+// memory, so bytes beyond the new program's length keep whatever the
+// previous load left there, and execution runs on into them.
+func TestLoadProgramOverwritesStaleBytes(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	// First program: ld a, 0x0A; inc a; halt; nop.
+	if err := cpu.LoadProgram([]byte{r8.OpLdRN, 0x0A, r8.OpIncR, r8.OpHalt, r8.OpNop}, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Second, shorter program at the same address: inc a; inc a.
+	if err := cpu.LoadProgram([]byte{r8.OpIncR, r8.OpIncR}, 0); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{r8.OpIncR, r8.OpIncR, r8.OpIncR, r8.OpHalt, r8.OpNop}
+	if got := cpu.Memory[:len(want)]; !bytes.Equal(got, want) {
+		t.Errorf("want Memory[:5] == % X, got % X", want, got)
+	}
+	// Run executes the new program and then the stale bytes, halting at
+	// the stale halt instruction.
+	if err := cpu.Run(); err != nil {
+		t.Fatal(err)
+	}
+	assertState(t, cpu, cpuState{pc: 4, a: 3, ps: 0, halted: true})
+}
+
 func TestResetLoadsPCFromLittleEndianResetVector(t *testing.T) {
 	t.Parallel()
 	cpu := r8.NewCPU()
@@ -667,6 +887,19 @@ func TestJmpOperandWrapsAroundMemory(t *testing.T) {
 	}
 }
 
+// TestStepLdOperandWrapsAtEndOfMemory is the execution-side counterpart of
+// the NextInstruction wrap cases: an ld at the last byte of memory reads
+// its operand from address 0.
+func TestStepLdOperandWrapsAtEndOfMemory(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.PC = 0xFFFF
+	cpu.Memory[0xFFFF] = r8.OpLdRN
+	cpu.Memory[0x0000] = 0x2A // operand, fetched after PC wraps
+	mustStep(t, cpu)
+	assertState(t, cpu, cpuState{pc: 1, a: 0x2A, ps: 0, halted: false})
+}
+
 func TestBranchWrapsAroundMemory(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -757,43 +990,80 @@ func TestAssembleErrors(t *testing.T) {
 		name    string
 		tokens  []string
 		wantErr error
+		wantMsg string
 	}{
-		{"invalid operand", []string{"LD", "A,", "not_a_number"}, r8.ErrBadOperand},
-		{"operand out of range", []string{"LD", "A,", "0x100"}, r8.ErrBadOperand},
-		{"unknown instruction", []string{"FOOBAR"}, r8.ErrUnknownInstruction},
-		{"missing operand", []string{"LD"}, r8.ErrMissingOperand},
-		{"jmp address out of range", []string{"JMP", "0x10000"}, r8.ErrBadOperand},
-		{"jmp missing operand", []string{"JMP"}, r8.ErrMissingOperand},
-		{"bra missing operand", []string{"BRA"}, r8.ErrMissingOperand},
-		{"bra operand out of range", []string{"BRA", "0x100"}, r8.ErrBadOperand},
-		{"ld rejects negative operand", []string{"LD", "A,", "-0x01"}, r8.ErrBadOperand},
-		{"bra rejects negative operand", []string{"BRA", "-0x03"}, r8.ErrBadOperand},
-		{"bra invalid operand", []string{"BRA", "x"}, r8.ErrBadOperand},
-		{"beq missing operand", []string{"BEQ"}, r8.ErrMissingOperand},
-		{"beq operand out of range", []string{"BEQ", "0x100"}, r8.ErrBadOperand},
-		{"bne missing operand", []string{"BNE"}, r8.ErrMissingOperand},
-		{"bne operand out of range", []string{"BNE", "0x100"}, r8.ErrBadOperand},
-		{"decimal is rejected", []string{"LD", "A,", "5"}, r8.ErrBadOperand},
-		{"signed decimal offset is rejected", []string{"BRA", "-3"}, r8.ErrBadOperand},
-		{"binary is rejected", []string{"LD", "A,", "0b101"}, r8.ErrBadOperand},
-		{"octal is rejected", []string{"LD", "A,", "0o7"}, r8.ErrBadOperand},
-		{"uppercase prefix is rejected", []string{"LD", "A,", "0X05"}, r8.ErrBadOperand},
-		{"prefix without digits", []string{"LD", "A,", "0x"}, r8.ErrBadOperand},
-		{"underscore in digits", []string{"JMP", "0x12_34"}, r8.ErrBadOperand},
-		{"too many operands", []string{"LD", "A,", "0x05,", "0x06"}, r8.ErrBadOperand},
-		{"too many operands without spaces", []string{"LD", "A,", "0x05,0x06"}, r8.ErrBadOperand},
-		{"too many operands with spaced comma", []string{"LD", "A,", "0x05", ",", "0x06"}, r8.ErrBadOperand},
-		{"comma after operandless instruction", []string{"INC", "A,", "DEC", "A"}, r8.ErrBadOperand},
-		{"comma instead of operand", []string{"LD", ",0x05"}, r8.ErrMissingOperand},
-		{"inc missing register", []string{"INC"}, r8.ErrMissingOperand},
-		{"dec missing register", []string{"DEC"}, r8.ErrMissingOperand},
-		{"ld without register", []string{"LD", "0x05"}, r8.ErrBadRegister},
-		{"unknown register", []string{"INC", "Z"}, r8.ErrBadRegister},
-		{"number instead of register", []string{"INC", "0x05"}, r8.ErrBadRegister},
-		{"ld missing value", []string{"LD", "A"}, r8.ErrMissingOperand},
-		{"ld missing value after comma", []string{"LD", "A,"}, r8.ErrMissingOperand},
-		{"ld missing comma", []string{"LD", "A", "0x05"}, r8.ErrBadOperand},
-		{"inc with extra operand", []string{"INC", "A,", "0x05"}, r8.ErrBadOperand},
+		{"invalid operand", []string{"LD", "A,", "not_a_number"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "not_a_number": labels are only allowed for jumps and branches`},
+		{"operand out of range", []string{"LD", "A,", "0x100"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "0x100": strconv.ParseUint: parsing "100": value out of range`},
+		{"unknown instruction", []string{"FOOBAR"}, r8.ErrUnknownInstruction,
+			`line 1: unknown instruction: "FOOBAR"`},
+		{"missing operand", []string{"LD"}, r8.ErrMissingOperand,
+			`line 1: LD: missing operand: want a register`},
+		{"jmp address out of range", []string{"JMP", "0x10000"}, r8.ErrBadOperand,
+			`line 1: jmp: bad operand "0x10000": strconv.ParseUint: parsing "10000": value out of range`},
+		{"jmp missing operand", []string{"JMP"}, r8.ErrMissingOperand,
+			`line 1: JMP: missing operand`},
+		{"bra missing operand", []string{"BRA"}, r8.ErrMissingOperand,
+			`line 1: BRA: missing operand`},
+		{"bra operand out of range", []string{"BRA", "0x100"}, r8.ErrBadOperand,
+			`line 1: bra: bad operand "0x100": strconv.ParseUint: parsing "100": value out of range`},
+		{"ld rejects negative operand", []string{"LD", "A,", "-0x01"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "-0x01": literals must be 0x-prefixed hex`},
+		{"bra rejects negative operand", []string{"BRA", "-0x03"}, r8.ErrBadOperand,
+			`line 1: bra: bad operand "-0x03": literals must be 0x-prefixed hex`},
+		{"bra invalid operand", []string{"BRA", "x"}, r8.ErrBadOperand,
+			`line 1: bra: bad operand "x": undefined label`},
+		{"beq missing operand", []string{"BEQ"}, r8.ErrMissingOperand,
+			`line 1: BEQ: missing operand`},
+		{"beq operand out of range", []string{"BEQ", "0x100"}, r8.ErrBadOperand,
+			`line 1: beq: bad operand "0x100": strconv.ParseUint: parsing "100": value out of range`},
+		{"bne missing operand", []string{"BNE"}, r8.ErrMissingOperand,
+			`line 1: BNE: missing operand`},
+		{"bne operand out of range", []string{"BNE", "0x100"}, r8.ErrBadOperand,
+			`line 1: bne: bad operand "0x100": strconv.ParseUint: parsing "100": value out of range`},
+		{"decimal is rejected", []string{"LD", "A,", "5"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "5": literals must be 0x-prefixed hex`},
+		{"signed decimal offset is rejected", []string{"BRA", "-3"}, r8.ErrBadOperand,
+			`line 1: bra: bad operand "-3": literals must be 0x-prefixed hex`},
+		{"binary is rejected", []string{"LD", "A,", "0b101"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "0b101": literals must be 0x-prefixed hex`},
+		{"octal is rejected", []string{"LD", "A,", "0o7"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "0o7": literals must be 0x-prefixed hex`},
+		{"uppercase prefix is rejected", []string{"LD", "A,", "0X05"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "0X05": literals must be 0x-prefixed hex`},
+		{"prefix without digits", []string{"LD", "A,", "0x"}, r8.ErrBadOperand,
+			`line 1: ld: bad operand "0x": strconv.ParseUint: parsing "": invalid syntax`},
+		{"underscore in digits", []string{"JMP", "0x12_34"}, r8.ErrBadOperand,
+			`line 1: jmp: bad operand "0x12_34": strconv.ParseUint: parsing "12_34": invalid syntax`},
+		{"too many operands", []string{"LD", "A,", "0x05,", "0x06"}, r8.ErrBadOperand,
+			`line 1: LD: bad operand: too many operands`},
+		{"too many operands without spaces", []string{"LD", "A,", "0x05,0x06"}, r8.ErrBadOperand,
+			`line 1: LD: bad operand: too many operands`},
+		{"too many operands with spaced comma", []string{"LD", "A,", "0x05", ",", "0x06"}, r8.ErrBadOperand,
+			`line 1: LD: bad operand: too many operands`},
+		{"comma after operandless instruction", []string{"INC", "A,", "DEC", "A"}, r8.ErrBadOperand,
+			`line 1: INC: bad operand: too many operands`},
+		{"comma instead of operand", []string{"LD", ",0x05"}, r8.ErrMissingOperand,
+			`line 1: LD: missing operand: want a register`},
+		{"inc missing register", []string{"INC"}, r8.ErrMissingOperand,
+			`line 1: INC: missing operand: want a register`},
+		{"dec missing register", []string{"DEC"}, r8.ErrMissingOperand,
+			`line 1: DEC: missing operand: want a register`},
+		{"ld without register", []string{"LD", "0x05"}, r8.ErrBadRegister,
+			`line 1: LD: bad register: "0x05"`},
+		{"unknown register", []string{"INC", "Z"}, r8.ErrBadRegister,
+			`line 1: INC: bad register: "Z"`},
+		{"number instead of register", []string{"INC", "0x05"}, r8.ErrBadRegister,
+			`line 1: INC: bad register: "0x05"`},
+		{"ld missing value", []string{"LD", "A"}, r8.ErrMissingOperand,
+			`line 1: LD: missing operand`},
+		{"ld missing value after comma", []string{"LD", "A,"}, r8.ErrMissingOperand,
+			`line 1: LD: missing operand`},
+		{"ld missing comma", []string{"LD", "A", "0x05"}, r8.ErrBadOperand,
+			`line 1: LD: bad operand: want a comma before "0x05"`},
+		{"inc with extra operand", []string{"INC", "A,", "0x05"}, r8.ErrBadOperand,
+			`line 1: INC: bad operand: too many operands`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -801,6 +1071,9 @@ func TestAssembleErrors(t *testing.T) {
 			_, err := assemble(c.tokens...)
 			if !errors.Is(err, c.wantErr) {
 				t.Errorf("Assemble(%v): want %v, got %v", c.tokens, c.wantErr, err)
+			}
+			if err != nil && err.Error() != c.wantMsg {
+				t.Errorf("Assemble(%v): want error %q, got %q", c.tokens, c.wantMsg, err.Error())
 			}
 		})
 	}
@@ -821,6 +1094,35 @@ halt`
 	want := []byte{r8.OpLdRN, 3, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt}
 	if !bytes.Equal(got, want) {
 		t.Errorf("want %v, got %v", want, got)
+	}
+}
+
+// TestAssembleSourceFormat checks how the assembler treats source layout:
+// line endings, whitespace, comments, and empty input.
+func TestAssembleSourceFormat(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want []byte
+	}{
+		{"CRLF line endings", "halt\r\nnop\r\n", []byte{r8.OpHalt, r8.OpNop}},
+		{"tab separated tokens", "ld\ta,\t0x05\nhalt", []byte{r8.OpLdRN, 0x05, r8.OpHalt}},
+		{"comment only source", "; nothing to assemble\n", nil},
+		{"whitespace only source", " \t\n  \n", nil},
+		{"empty source", "", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := r8.Assemble(c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, c.want) {
+				t.Errorf("Assemble(%q) = % X, want % X", c.src, got, c.want)
+			}
+		})
 	}
 }
 
@@ -869,6 +1171,9 @@ func TestAssembleLabels(t *testing.T) {
 		{"two labels at one address", "a:\nb: inc a\nbra a\nbra b", []byte{r8.OpIncR, r8.OpBra, 0xFD, r8.OpBra, 0xFB}},
 		{"label at end of program", "bra end\nend:", []byte{r8.OpBra, 0}},
 		{"label named like a mnemonic", "inc: bra inc", []byte{r8.OpBra, 0xFE}},
+		{"label named like a register", "a: inc a", []byte{r8.OpIncR}},
+		{"self branch", "x: bra x", []byte{r8.OpBra, 0xFE}},
+		{"unicode letter label", "café: bra café", []byte{r8.OpBra, 0xFE}},
 		{"numbers still work beside labels", "x: bra 0xFE\njmp x", []byte{r8.OpBra, 0xFE, r8.OpJmp, 0, 0}},
 		{
 			"max forward offset",
@@ -907,6 +1212,9 @@ func TestAssembleLabelErrors(t *testing.T) {
 		{"undefined label is a bad operand", "nop\nbra nowhere", r8.ErrBadOperand, "line 2:"},
 		{"labels are case-sensitive", "Loop: bra loop", r8.ErrUndefinedLabel, "line 1:"},
 		{"duplicate label", "a: nop\na: halt", r8.ErrDuplicateLabel, "line 2:"},
+		// Pinned as-is: two labels with the same name on one line are a
+		// duplicate-label error, not two definitions at one address.
+		{"duplicate label twice on one line", "a: a: nop", r8.ErrDuplicateLabel, `line 1: duplicate label: "a"`},
 		{"name starts with digit", "1abc: nop", r8.ErrBadLabel, "line 1:"},
 		{"empty name", ": nop", r8.ErrBadLabel, "line 1:"},
 		{"forward branch out of range", "bra far\n" + nops(128) + "far:", r8.ErrBadOperand, "line 1:"},
@@ -925,6 +1233,22 @@ func TestAssembleLabelErrors(t *testing.T) {
 				t.Errorf("want error starting %q, got %q", c.wantMsg, err)
 			}
 		})
+	}
+}
+
+// TestAssembleFillsMemoryExactly checks that a program ending exactly at
+// the reset vector assembles, and one byte more does not.
+func TestAssembleFillsMemoryExactly(t *testing.T) {
+	t.Parallel()
+	program, err := r8.Assemble(nops(int(r8.ResetVector)))
+	if err != nil {
+		t.Fatalf("want a program up to the reset vector to assemble, got %v", err)
+	}
+	if len(program) != int(r8.ResetVector) {
+		t.Errorf("want %d bytes, got %d", r8.ResetVector, len(program))
+	}
+	if _, err := r8.Assemble(nops(int(r8.ResetVector) + 1)); !errors.Is(err, r8.ErrProgramTooLarge) {
+		t.Errorf("want ErrProgramTooLarge, got %v", err)
 	}
 }
 
@@ -950,6 +1274,72 @@ func TestAssembleLabelsRun(t *testing.T) {
 	}
 	if !cpu.Halted || cpu.R[r8.A] != 0 {
 		t.Errorf("want Halted with A == 0, got Halted=%v A=%d", cpu.Halted, cpu.R[r8.A])
+	}
+}
+
+// TestProgramsEndToEnd assembles, runs, and round-trips complete programs:
+// the bytes must match a golden encoding, the run must end in a golden
+// state, and disassembling then re-assembling must give the same bytes.
+func TestProgramsEndToEnd(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		src       string
+		wantBytes []byte
+		wantState cpuState
+	}{
+		{
+			name: "countdown from program.asm",
+			src: `
+				ld a, 0x0A ; load 10 into A
+			loop:
+				dec a      ; decrement A
+				bne loop   ; repeat until A is zero
+				halt       ; stop
+			`,
+			wantBytes: []byte{r8.OpLdRN, 0x0A, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt},
+			wantState: cpuState{pc: 6, a: 0, ps: r8.FlagZ, halted: true},
+		},
+		{
+			name: "branchy labels",
+			src: `
+			start: ld a, 0x03
+			loop:  dec a
+			       beq done
+			       jmp loop
+			done:  inc a
+			       halt
+			`,
+			wantBytes: []byte{r8.OpLdRN, 0x03, r8.OpDecR, r8.OpBeq, 0x03, r8.OpJmp, 0x02, 0x00, r8.OpIncR, r8.OpHalt},
+			wantState: cpuState{pc: 10, a: 1, ps: 0, halted: true},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			program, err := r8.Assemble(c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(program, c.wantBytes) {
+				t.Errorf("Assemble gave % X, want % X", program, c.wantBytes)
+			}
+			cpu := cpuWithProgram(t, program, 0)
+			if err := cpu.Run(); err != nil {
+				t.Fatal(err)
+			}
+			assertState(t, cpu, c.wantState)
+
+			// Disassembling and re-assembling must give the same bytes.
+			src := r8.Disassemble(program)
+			roundTrip, err := r8.Assemble(src)
+			if err != nil {
+				t.Fatalf("Assemble(%q): %v", src, err)
+			}
+			if !bytes.Equal(roundTrip, program) {
+				t.Errorf("round trip of % X via %q gave % X", program, src, roundTrip)
+			}
+		})
 	}
 }
 

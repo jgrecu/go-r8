@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,5 +79,58 @@ func TestRunRequiresOneProgramFile(t *testing.T) {
 	t.Parallel()
 	if err := run(nil, strings.NewReader(""), &bytes.Buffer{}); err == nil {
 		t.Error("want usage error, got nil")
+	}
+}
+
+func TestRunMissingProgramFile(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "missing.bin")
+	if err := run([]string{missing}, strings.NewReader(""), &bytes.Buffer{}); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("want fs.ErrNotExist, got %v", err)
+	}
+}
+
+func TestRunProgramTooLarge(t *testing.T) {
+	t.Parallel()
+	bin := writeProgram(t, bytes.Repeat([]byte{r8.OpNop}, 65535))
+	err := run([]string{bin}, strings.NewReader(""), &bytes.Buffer{})
+	if !errors.Is(err, r8.ErrProgramTooLarge) {
+		t.Errorf("want ErrProgramTooLarge, got %v", err)
+	}
+}
+
+func TestRunEmptyProgramShowsOneStatusLine(t *testing.T) {
+	t.Parallel()
+	bin := writeProgram(t, nil)
+	var out bytes.Buffer
+	if err := run([]string{bin}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	want := "CPU state: PC: 0000  A: 00  PS: --------  Next op: HALT\n"
+	if out.String() != want {
+		t.Errorf("want %q, got %q", want, out.String())
+	}
+}
+
+func TestRunShowsUnknownOpcodeInStatus(t *testing.T) {
+	t.Parallel()
+	bin := writeProgram(t, []byte{0xFF})
+	var out bytes.Buffer
+	if err := run([]string{bin}, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Next op: ???") {
+		t.Errorf("want status with an unknown opcode, got:\n%s", out.String())
+	}
+}
+
+// TestRunPropagatesScannerError feeds a line longer than the scanner's
+// limit, which is the one scanner error reachable through run's input.
+func TestRunPropagatesScannerError(t *testing.T) {
+	t.Parallel()
+	bin := writeProgram(t, []byte{r8.OpNop})
+	longLine := strings.Repeat("x", 70000) // over bufio.MaxScanTokenSize
+	if err := run([]string{bin}, strings.NewReader(longLine), &bytes.Buffer{}); !errors.Is(err, bufio.ErrTooLong) {
+		t.Errorf("want bufio.ErrTooLong, got %v", err)
 	}
 }
