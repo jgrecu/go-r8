@@ -77,6 +77,147 @@ func TestNewInitialisesCPU(t *testing.T) {
 	if cpu.Halted {
 		t.Error("after New, want Halted == false, got true")
 	}
+	if cpu.PS != 0 {
+		t.Errorf("after New, want PS == 0, got %#02x", cpu.PS)
+	}
+}
+
+// TestFlagBits checks the flag bits against the R8 manual's status register
+// layout.
+func TestFlagBits(t *testing.T) {
+	t.Parallel()
+	if r8.FlagZ != 0x02 {
+		t.Errorf("want FlagZ == 0x02 (bit 1), got %#02x", r8.FlagZ)
+	}
+	if r8.FlagN != 0x80 {
+		t.Errorf("want FlagN == 0x80 (bit 7), got %#02x", r8.FlagN)
+	}
+}
+
+func TestFlagsString(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		ps   r8.Flags
+		want string
+	}{
+		{0, "--------"},
+		{r8.FlagZ, "------Z-"},
+		{r8.FlagN, "N-------"},
+		{r8.FlagN | r8.FlagZ, "N-----Z-"},
+		{0xFF, "NV---IZC"},
+	}
+	for _, c := range cases {
+		if got := c.ps.String(); got != c.want {
+			t.Errorf("Flags(%#02x).String() = %q, want %q", byte(c.ps), got, c.want)
+		}
+	}
+}
+
+func TestResetClearsPS(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.PS = 0xFF
+	cpu.Reset()
+	if cpu.PS != 0 {
+		t.Errorf("after Reset, want PS == 0, got %#02x", cpu.PS)
+	}
+}
+
+func TestResetZeroesRegisters(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	for r := range cpu.R {
+		cpu.R[r] = 0xFF
+	}
+	cpu.Reset()
+	for r, v := range cpu.R {
+		if v != 0 {
+			t.Errorf("after Reset, want %v == 0, got %#02x", r8.Register(r), v)
+		}
+	}
+}
+
+// TestFlags checks that ld, inc, and dec set Z and N from their result and
+// leave the other flags alone, and that other instructions change no flags.
+func TestFlags(t *testing.T) {
+	t.Parallel()
+	const others r8.Flags = 0x45 // C, I, and V: bits ld, inc, and dec must not touch
+	cases := []struct {
+		name   string
+		src    string
+		initA  byte
+		initPS r8.Flags
+		wantPS r8.Flags
+	}{
+		{"ld zero sets Z", "ld a, 0x00", 0, 0, r8.FlagZ},
+		{"ld positive clears Z and N", "ld a, 0x01", 0, r8.FlagZ | r8.FlagN, 0},
+		{"ld bit 7 sets N", "ld a, 0x80", 0, 0, r8.FlagN},
+		{"inc wrapping to zero sets Z", "inc a", 0xFF, 0, r8.FlagZ},
+		{"inc into bit 7 sets N", "inc a", 0x7F, 0, r8.FlagN},
+		{"inc positive clears Z and N", "inc a", 0x00, r8.FlagZ | r8.FlagN, 0},
+		{"dec to zero sets Z", "dec a", 0x01, 0, r8.FlagZ},
+		{"dec wrapping from zero sets N", "dec a", 0x00, 0, r8.FlagN},
+		{"dec positive clears Z and N", "dec a", 0x02, r8.FlagZ | r8.FlagN, 0},
+		{"ld leaves other flags", "ld a, 0x00", 0, others, others | r8.FlagZ},
+		{"inc leaves other flags", "inc a", 0xFF, others, others | r8.FlagZ},
+		{"dec leaves other flags", "dec a", 0x01, others, others | r8.FlagZ},
+		{"nop changes no flags", "nop", 0, 0xFF, 0xFF},
+		{"jmp changes no flags", "jmp 0x0003", 0, 0xFF, 0xFF},
+		{"bra changes no flags", "bra 0x00", 0, 0xFF, 0xFF},
+		{"beq changes no flags", "beq 0x00", 0, 0xFF, 0xFF},
+		{"bne changes no flags", "bne 0x00", 0, 0xFF, 0xFF},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			program, err := r8.Assemble(c.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cpu := r8.NewCPU()
+			if err := cpu.LoadProgram(program, 0); err != nil {
+				t.Fatal(err)
+			}
+			cpu.R[r8.A] = c.initA
+			cpu.PS = c.initPS
+			mustStep(t, cpu)
+			if cpu.PS != c.wantPS {
+				t.Errorf("want PS == %#02x, got %#02x", c.wantPS, cpu.PS)
+			}
+		})
+	}
+}
+
+// TestBranchesTestZFlagNotA checks that beq and bne follow the Z flag even
+// when it disagrees with the contents of A.
+func TestBranchesTestZFlagNotA(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		tokens []string
+		initA  byte
+		initPS r8.Flags
+		wantA  byte
+	}{
+		{"beq not taken when Z clear and A zero", []string{"BEQ", "0x01", "INC", "A", "HALT"}, 0, 0, 1},
+		{"beq taken when Z set and A nonzero", []string{"BEQ", "0x01", "INC", "A", "HALT"}, 5, r8.FlagZ, 5},
+		{"bne taken when Z clear and A zero", []string{"BNE", "0x01", "INC", "A", "HALT"}, 0, 0, 0},
+		{"bne not taken when Z set and A nonzero", []string{"BNE", "0x01", "INC", "A", "HALT"}, 5, r8.FlagZ, 6},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cpu := newTestCPU(t, c.tokens...)
+			cpu.R[r8.A] = c.initA
+			cpu.PS = c.initPS
+			if err := cpu.Run(); err != nil {
+				t.Fatal(err)
+			}
+			if cpu.R[r8.A] != c.wantA {
+				t.Errorf("want A == %d, got %d", c.wantA, cpu.R[r8.A])
+			}
+		})
+	}
 }
 
 // TestRegisterIDs checks the register IDs against the R8 manual's register ID
@@ -278,12 +419,12 @@ func TestCpuRun(t *testing.T) {
 		{"bra 1 skips inc", []string{"BRA", "0x01", "INC", "A", "HALT"}, 0, 0, 0, 4},
 		{"bra skips several instructions", []string{"BRA", "0x02", "INC", "A", "INC", "A", "INC", "A", "HALT"}, 0, 0, 1, 6},
 		{"bra after ld", []string{"LD", "A,", "0x0A", "BRA", "0x01", "INC", "A", "HALT"}, 0, 0, 10, 6},
-		{"beq taken when A is zero", []string{"BEQ", "0x01", "INC", "A", "HALT"}, 0, 0, 0, 4},
+		{"beq taken after ld zero", []string{"LD", "A,", "0x00", "BEQ", "0x01", "INC", "A", "HALT"}, 0, 0, 0, 6},
 		{"beq not taken when A is nonzero", []string{"LD", "A,", "0x05", "BEQ", "0x01", "INC", "A", "HALT"}, 0, 0, 6, 6},
 		{"beq taken after dec reaches zero", []string{"LD", "A,", "0x01", "DEC", "A", "BEQ", "0x01", "INC", "A", "HALT"}, 0, 0, 0, 7},
 		{"beq 0 falls through", []string{"BEQ", "0x00", "INC", "A", "HALT"}, 0, 0, 1, 4},
 		{"bne taken when A is nonzero", []string{"LD", "A,", "0x05", "BNE", "0x01", "INC", "A", "HALT"}, 0, 0, 5, 6},
-		{"bne not taken when A is zero", []string{"BNE", "0x01", "INC", "A", "HALT"}, 0, 0, 1, 4},
+		{"bne not taken after ld zero", []string{"LD", "A,", "0x00", "BNE", "0x01", "INC", "A", "HALT"}, 0, 0, 1, 6},
 		{"bne not taken after dec reaches zero", []string{"LD", "A,", "0x01", "DEC", "A", "BNE", "0x01", "INC", "A", "HALT"}, 0, 0, 1, 7},
 		{"bne 0 falls through", []string{"LD", "A,", "0x05", "BNE", "0x00", "INC", "A", "HALT"}, 0, 0, 6, 6},
 		{"bne backward loops until A is zero", []string{"LD", "A,", "0x03", "DEC", "A", "BNE", "0xFD", "HALT"}, 0, 0, 0, 6},
@@ -453,18 +594,14 @@ func TestResetClearsHalted(t *testing.T) {
 	}
 }
 
-func TestResetLeavesRegistersAndMemoryUnchanged(t *testing.T) {
+func TestResetLeavesMemoryUnchanged(t *testing.T) {
 	t.Parallel()
 	cpu := r8.NewCPU()
-	cpu.R[r8.A] = 0x42
 	cpu.Memory[0x0100] = 0x99
 	cpu.Memory[r8.ResetVector] = 0x00
 	cpu.Memory[r8.ResetVector+1] = 0x01
 	want := cpu.Memory
 	cpu.Reset()
-	if cpu.R[r8.A] != 0x42 {
-		t.Errorf("want A == 0x42, got %#02x", cpu.R[r8.A])
-	}
 	if cpu.Memory != want {
 		t.Error("want Memory unchanged after Reset")
 	}
@@ -483,8 +620,8 @@ func TestResetRestartsProgram(t *testing.T) {
 	if err := cpu.Run(); err != nil {
 		t.Fatal(err)
 	}
-	if cpu.R[r8.A] != 2 {
-		t.Errorf("want A == 2 after running twice, got %d", cpu.R[r8.A])
+	if cpu.R[r8.A] != 1 {
+		t.Errorf("want A == 1 after restarting from zeroed registers, got %d", cpu.R[r8.A])
 	}
 	if cpu.PC != 0x0202 {
 		t.Errorf("want PC == 0x0202, got %#04x", cpu.PC)
@@ -535,7 +672,7 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 	cases := []struct {
 		name   string
 		op     byte
-		a      byte
+		ps     r8.Flags
 		pc     uint16
 		offset byte
 		wantPC uint16
@@ -545,21 +682,21 @@ func TestBranchWrapsAroundMemory(t *testing.T) {
 		{"bra max forward offset", r8.OpBra, 0, 0xFFFE, 0x7F, 0x007F},
 		{"bra 0x80 is max backward offset", r8.OpBra, 0, 0x0100, 0x80, 0x0082},
 		{"bra target before start of memory", r8.OpBra, 0, 0x0000, 0xFC, 0xFFFE},
-		{"beq taken, target before start of memory", r8.OpBeq, 0, 0x0000, 0xFC, 0xFFFE},
-		{"bne taken, target before start of memory", r8.OpBne, 1, 0x0000, 0xFC, 0xFFFE},
-		{"beq taken, operand read after PC wraps", r8.OpBeq, 0, 0xFFFF, 1, 2},
-		{"beq not taken, PC moves past wrapped operand", r8.OpBeq, 1, 0xFFFF, 1, 1},
-		{"beq taken, target past end of memory", r8.OpBeq, 0, 0xFFF0, 0x20, 0x0012},
-		{"bne taken, operand read after PC wraps", r8.OpBne, 1, 0xFFFF, 1, 2},
-		{"bne not taken, PC moves past wrapped operand", r8.OpBne, 0, 0xFFFF, 1, 1},
-		{"bne taken, target past end of memory", r8.OpBne, 1, 0xFFF0, 0x20, 0x0012},
+		{"beq taken, target before start of memory", r8.OpBeq, r8.FlagZ, 0x0000, 0xFC, 0xFFFE},
+		{"bne taken, target before start of memory", r8.OpBne, 0, 0x0000, 0xFC, 0xFFFE},
+		{"beq taken, operand read after PC wraps", r8.OpBeq, r8.FlagZ, 0xFFFF, 1, 2},
+		{"beq not taken, PC moves past wrapped operand", r8.OpBeq, 0, 0xFFFF, 1, 1},
+		{"beq taken, target past end of memory", r8.OpBeq, r8.FlagZ, 0xFFF0, 0x20, 0x0012},
+		{"bne taken, operand read after PC wraps", r8.OpBne, 0, 0xFFFF, 1, 2},
+		{"bne not taken, PC moves past wrapped operand", r8.OpBne, r8.FlagZ, 0xFFFF, 1, 1},
+		{"bne taken, target past end of memory", r8.OpBne, 0, 0xFFF0, 0x20, 0x0012},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			cpu := r8.NewCPU()
 			cpu.PC = c.pc
-			cpu.R[r8.A] = c.a
+			cpu.PS = c.ps
 			cpu.Memory[c.pc] = c.op
 			cpu.Memory[c.pc+1] = c.offset
 			mustStep(t, cpu)

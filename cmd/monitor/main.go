@@ -13,8 +13,6 @@ import (
 	r8 "github.com/jgrecu/go-r8"
 )
 
-const header = "Next Oper            PC      > A"
-
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "monitor:", err)
@@ -38,7 +36,6 @@ func run(args []string, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("load %s: %w", args[0], err)
 	}
 
-	fmt.Fprintln(out, header)
 	fmt.Fprint(out, status(cpu))
 	scan := bufio.NewScanner(in)
 	for !cpu.Halted && scan.Scan() {
@@ -51,22 +48,30 @@ func run(args []string, in io.Reader, out io.Writer) error {
 	return scan.Err()
 }
 
-// status returns the monitor's one-line view of the next instruction, PC,
-// and A. It has no trailing newline: at a terminal, the user's Enter key
-// supplies it.
+// status returns the monitor's one-line view of the CPU state, followed by
+// the next instruction. It has no trailing newline: at a terminal, the
+// user's Enter key supplies it.
 func status(cpu *r8.CPU) string {
-	// Mnemonics and registers are uppercased, but numbers are not: the
-	// assembler reads "0x" but not "0X".
+	var b strings.Builder
+	fmt.Fprintf(&b, "CPU state: PC: %04X  ", cpu.PC)
+	for r, v := range cpu.R {
+		fmt.Fprintf(&b, "%s: %02X  ", strings.ToUpper(r8.Register(r).String()), v)
+	}
+	fmt.Fprintf(&b, "PS: %v  Next op: %s", cpu.PS, next(cpu))
+	return b.String()
+}
+
+// next returns the instruction at PC, or "halted". Mnemonics and registers
+// are uppercased, but numbers are not: the assembler reads "0x" but not "0X".
+func next(cpu *r8.CPU) string {
+	if cpu.Halted {
+		return "halted"
+	}
 	words := strings.Fields(cpu.NextInstruction())
 	for i, w := range words {
 		if !strings.HasPrefix(w, "0x") {
 			words[i] = strings.ToUpper(w)
 		}
 	}
-	next := strings.Join(words, " ")
-	label := fmt.Sprintf("next %-12q", next)
-	if cpu.Halted {
-		label = "halted"
-	}
-	return fmt.Sprintf("%-17s => %07d > %04d", label, cpu.PC, cpu.R[r8.A])
+	return strings.Join(words, " ")
 }
