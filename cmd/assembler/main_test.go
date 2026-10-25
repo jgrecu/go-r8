@@ -26,7 +26,7 @@ func TestRunWritesMachineCodeToStdout(t *testing.T) {
 	if err := run([]string{"-o", "-", src}, &stdout); err != nil {
 		t.Fatal(err)
 	}
-	want := []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt}
+	want := []byte{r8.OpLdRN, 3, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt}
 	if !bytes.Equal(stdout.Bytes(), want) {
 		t.Errorf("want %v, got %v", want, stdout.Bytes())
 	}
@@ -43,7 +43,7 @@ func TestRunWritesMachineCodeToFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []byte{r8.OpInc, r8.OpHalt}; !bytes.Equal(got, want) {
+	if want := []byte{r8.OpIncR, r8.OpHalt}; !bytes.Equal(got, want) {
 		t.Errorf("want %v, got %v", want, got)
 	}
 }

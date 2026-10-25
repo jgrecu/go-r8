@@ -22,7 +22,7 @@ func writeProgram(t *testing.T, program []byte) string {
 
 func TestRunStepsOncePerInputLineAndShowsFinalState(t *testing.T) {
 	t.Parallel()
-	bin := writeProgram(t, []byte{r8.OpLd, 7, r8.OpInc, r8.OpHalt})
+	bin := writeProgram(t, []byte{r8.OpLdRN, 7, r8.OpIncR, r8.OpHalt})
 	var out bytes.Buffer
 	if err := run([]string{bin}, strings.NewReader("\n\n\n\n\n"), &out); err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestRunStepsOncePerInputLineAndShowsFinalState(t *testing.T) {
 
 func TestRunStopsWhenInputEnds(t *testing.T) {
 	t.Parallel()
-	bin := writeProgram(t, []byte{r8.OpInc, r8.OpInc, r8.OpHalt})
+	bin := writeProgram(t, []byte{r8.OpIncR, r8.OpIncR, r8.OpHalt})
 	var out bytes.Buffer
 	if err := run([]string{bin}, strings.NewReader("\n"), &out); err != nil {
 		t.Fatal(err)

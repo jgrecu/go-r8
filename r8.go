@@ -27,15 +27,16 @@ type CPU struct {
 	Halted bool
 }
 
-// Opcodes of the R8 instruction set. OpInc, OpDec, and OpLd are base
-// opcodes: as in the R8 manual, the target register's ID occupies the low
-// nibble, so OpInc|byte(r) increments register r.
+// Opcodes of the R8 instruction set, named after the mnemonic and its
+// operand shape. OpIncR, OpDecR, and OpLdRN are base opcodes: as in the R8
+// manual, the target register's ID occupies the low nibble, so
+// OpIncR|byte(r) increments register r.
 const (
 	OpHalt byte = 0x00 // stop execution
 	OpNop  byte = 0x01 // do nothing
-	OpInc  byte = 0x30 // inc R: increment R
-	OpDec  byte = 0x40 // dec R: decrement R
-	OpLd   byte = 0x10 // ld R, N: load the following byte into R
+	OpIncR byte = 0x30 // inc R: increment R
+	OpDecR byte = 0x40 // dec R: decrement R
+	OpLdRN byte = 0x10 // ld R, N: load the following byte into R
 	OpJmp  byte = 0xF7 // jump to the following 16-bit little-endian address
 	OpBra  byte = 0xF0 // branch by the following signed byte, relative to the next instruction
 	OpBeq  byte = 0xF1 // branch by the following signed byte if A is zero
@@ -204,15 +205,14 @@ func (k operandKind) format(v uint16) string {
 	return fmt.Sprintf("0x%02X", v)
 }
 
-// instruction describes one opcode. execute runs after Step has fetched the
-// operand and moved PC to the next instruction, so it holds only the
-// instruction's semantics.
+// instruction describes one opcode. execute is one of the CPU's instruction
+// methods, called with reg and the fetched operand.
 type instruction struct {
 	mnemonic string
 	hasReg   bool     // the opcode encodes a target register
 	reg      Register // the target register, if hasReg
 	operand  operandKind
-	execute  func(cpu *CPU, operand uint16)
+	execute  func(cpu *CPU, r Register, operand uint16)
 }
 
 // source returns the instruction as one line of source, with operand as the
@@ -232,33 +232,33 @@ func (inst *instruction) source(operand string) string {
 // illegal instruction.
 var instructions = func() [256]*instruction {
 	t := [256]*instruction{
-		OpHalt: {mnemonic: "halt", execute: func(cpu *CPU, _ uint16) { cpu.Halted = true }},
-		OpNop:  {mnemonic: "nop", execute: func(*CPU, uint16) {}},
-		OpJmp:  {mnemonic: "jmp", operand: addr16, execute: func(cpu *CPU, addr uint16) { cpu.PC = addr }},
-		OpBra:  {mnemonic: "bra", operand: rel8, execute: func(cpu *CPU, off uint16) { cpu.branchIf(true, off) }},
-		OpBeq:  {mnemonic: "beq", operand: rel8, execute: func(cpu *CPU, off uint16) { cpu.branchIf(cpu.R[A] == 0, off) }},
-		OpBne:  {mnemonic: "bne", operand: rel8, execute: func(cpu *CPU, off uint16) { cpu.branchIf(cpu.R[A] != 0, off) }},
+		OpHalt: {mnemonic: "halt", execute: (*CPU).halt},
+		OpNop:  {mnemonic: "nop", execute: (*CPU).nop},
+		OpJmp:  {mnemonic: "jmp", operand: addr16, execute: (*CPU).jmp},
+		OpBra:  {mnemonic: "bra", operand: rel8, execute: (*CPU).bra},
+		OpBeq:  {mnemonic: "beq", operand: rel8, execute: (*CPU).beq},
+		OpBne:  {mnemonic: "bne", operand: rel8, execute: (*CPU).bne},
 	}
-	family(&t, OpLd, "ld", imm8, func(cpu *CPU, r Register, v uint16) { cpu.R[r] = byte(v) })
-	family(&t, OpInc, "inc", none, func(cpu *CPU, r Register, _ uint16) { cpu.R[r]++ })
-	family(&t, OpDec, "dec", none, func(cpu *CPU, r Register, _ uint16) { cpu.R[r]-- })
+	// ld, inc, and dec encode their target register in the opcode's low nibble.
+	for r := range Register(NumRegisters) {
+		t[OpLdRN|byte(r)] = &instruction{mnemonic: "ld", hasReg: true, reg: r, operand: imm8, execute: (*CPU).ld}
+		t[OpIncR|byte(r)] = &instruction{mnemonic: "inc", hasReg: true, reg: r, execute: (*CPU).inc}
+		t[OpDecR|byte(r)] = &instruction{mnemonic: "dec", hasReg: true, reg: r, execute: (*CPU).dec}
+	}
 	return t
 }()
 
-// family adds the instruction to t once per register r, at opcode base|r,
-// for instructions that encode their target register in the low nibble.
-func family(t *[256]*instruction, base byte, mnemonic string, k operandKind,
-	exec func(cpu *CPU, r Register, operand uint16)) {
-	for r := range Register(NumRegisters) {
-		t[base|byte(r)] = &instruction{
-			mnemonic: mnemonic,
-			hasReg:   true,
-			reg:      r,
-			operand:  k,
-			execute:  func(cpu *CPU, v uint16) { exec(cpu, r, v) },
-		}
-	}
-}
+// The instruction semantics. Each runs after Step has fetched the operand
+// and moved PC to the next instruction.
+func (cpu *CPU) halt(Register, uint16)       { cpu.Halted = true }
+func (cpu *CPU) nop(Register, uint16)        {}
+func (cpu *CPU) ld(r Register, v uint16)     { cpu.R[r] = byte(v) }
+func (cpu *CPU) inc(r Register, _ uint16)    { cpu.R[r]++ }
+func (cpu *CPU) dec(r Register, _ uint16)    { cpu.R[r]-- }
+func (cpu *CPU) jmp(_ Register, addr uint16) { cpu.PC = addr }
+func (cpu *CPU) bra(_ Register, off uint16)  { cpu.branchIf(true, off) }
+func (cpu *CPU) beq(_ Register, off uint16)  { cpu.branchIf(cpu.R[A] == 0, off) }
+func (cpu *CPU) bne(_ Register, off uint16)  { cpu.branchIf(cpu.R[A] != 0, off) }
 
 // opcodes maps each mnemonic to its opcode. For an instruction that encodes
 // a register, it is the base opcode, to be combined with the register's ID.
@@ -301,7 +301,7 @@ func (cpu *CPU) Step() error {
 	}
 	operand := cpu.operandAt(cpu.PC+1, inst.operand)
 	cpu.PC += 1 + uint16(inst.operand.size())
-	inst.execute(cpu, operand)
+	inst.execute(cpu, inst.reg, operand)
 	return nil
 }
 
@@ -481,8 +481,9 @@ type parser struct {
 
 // parseLine adds the labels and instructions in one line's tokens.
 func (p *parser) parseLine(line int, tokens []string) error {
-	for i := 0; i < len(tokens); i++ {
-		tok := tokens[i]
+	for len(tokens) > 0 {
+		tok := tokens[0]
+		tokens = tokens[1:]
 		if name, ok := strings.CutSuffix(tok, ":"); ok {
 			if err := p.define(name); err != nil {
 				return err
@@ -493,48 +494,59 @@ func (p *parser) parseLine(line int, tokens []string) error {
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrUnknownInstruction, tok)
 		}
-		inst := instructions[op]
-		if inst.hasReg {
-			i++
-			if i == len(tokens) || tokens[i] == "," {
-				return fmt.Errorf("%s: %w: want a register", tok, ErrMissingOperand)
-			}
-			r, ok := parseRegister(tokens[i])
-			if !ok {
-				return fmt.Errorf("%s: %w: %q", tok, ErrBadRegister, tokens[i])
-			}
-			op |= byte(r)
+		s, rest, err := parseStatement(line, op, tokens)
+		if err != nil {
+			return fmt.Errorf("%s: %w", tok, err)
 		}
-		s := stmt{line: line, op: op}
-
-		kind := inst.operand
-		if kind != none && inst.hasReg {
-			// A comma separates the register from the operand that follows it.
-			i++
-			if i == len(tokens) {
-				return fmt.Errorf("%s: %w", tok, ErrMissingOperand)
-			}
-			if tokens[i] != "," {
-				return fmt.Errorf("%s: %w: want a comma before %q", tok, ErrBadOperand, tokens[i])
-			}
-		}
-		if kind != none {
-			i++
-			if i == len(tokens) || tokens[i] == "," {
-				return fmt.Errorf("%s: %w", tok, ErrMissingOperand)
-			}
-			s.operand = tokens[i]
-		}
-		if i+1 < len(tokens) && tokens[i+1] == "," {
-			return fmt.Errorf("%s: %w: too many operands", tok, ErrBadOperand)
-		}
-		p.pc += 1 + kind.size()
+		tokens = rest
+		// Every register variant of an instruction has the same operand
+		// kind, so the size follows from the base opcode.
+		p.pc += 1 + instructions[op].operand.size()
 		if p.pc > MemSize {
 			return fmt.Errorf("%w: %d bytes", ErrProgramTooLarge, p.pc)
 		}
 		p.stmts = append(p.stmts, s)
 	}
 	return nil
+}
+
+// parseStatement reads the operands of the instruction with base opcode op
+// from the front of tokens, and returns the statement on source line line and
+// the tokens that follow. op must be a base opcode from opcodes.
+func parseStatement(line int, op byte, tokens []string) (stmt, []string, error) {
+	inst := instructions[op]
+	s := stmt{line: line, op: op}
+	if inst.hasReg {
+		if len(tokens) == 0 || tokens[0] == "," {
+			return stmt{}, nil, fmt.Errorf("%w: want a register", ErrMissingOperand)
+		}
+		r, ok := parseRegister(tokens[0])
+		if !ok {
+			return stmt{}, nil, fmt.Errorf("%w: %q", ErrBadRegister, tokens[0])
+		}
+		s.op |= byte(r)
+		tokens = tokens[1:]
+		if inst.operand != none {
+			// A comma separates the register from the operand that follows it.
+			if len(tokens) == 0 {
+				return stmt{}, nil, ErrMissingOperand
+			}
+			if tokens[0] != "," {
+				return stmt{}, nil, fmt.Errorf("%w: want a comma before %q", ErrBadOperand, tokens[0])
+			}
+			tokens = tokens[1:]
+		}
+	}
+	if inst.operand != none {
+		if len(tokens) == 0 || tokens[0] == "," {
+			return stmt{}, nil, ErrMissingOperand
+		}
+		s.operand, tokens = tokens[0], tokens[1:]
+	}
+	if len(tokens) > 0 && tokens[0] == "," {
+		return stmt{}, nil, fmt.Errorf("%w: too many operands", ErrBadOperand)
+	}
+	return s, tokens, nil
 }
 
 // define records label name at the current address.

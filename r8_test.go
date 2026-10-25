@@ -41,7 +41,7 @@ func mustStep(t testing.TB, cpu *r8.CPU) {
 // FuzzDisassembleAssemble checks that any machine code that disassembles
 // cleanly assembles back to exactly the same bytes.
 func FuzzDisassembleAssemble(f *testing.F) {
-	f.Add([]byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt})
+	f.Add([]byte{r8.OpLdRN, 3, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt})
 	f.Add([]byte{r8.OpJmp, 0x34, 0x12, r8.OpBra, 0x80})
 	f.Fuzz(func(t *testing.T, code []byte) {
 		src := r8.Disassemble(code)
@@ -117,7 +117,7 @@ func TestRegisterInstructions(t *testing.T) {
 				t.Fatal(err)
 			}
 			id := byte(r)
-			want := []byte{r8.OpLd | id, 0x07, r8.OpInc | id, r8.OpInc | id, r8.OpDec | id, r8.OpHalt}
+			want := []byte{r8.OpLdRN | id, 0x07, r8.OpIncR | id, r8.OpIncR | id, r8.OpDecR | id, r8.OpHalt}
 			if !bytes.Equal(program, want) {
 				t.Errorf("Assemble(%q) = % X, want % X", src, program, want)
 			}
@@ -359,7 +359,7 @@ func TestLoadProgramFillsMemoryExactly(t *testing.T) {
 func TestLoadProgramAtAddress(t *testing.T) {
 	t.Parallel()
 	cpu := r8.NewCPU()
-	program := []byte{r8.OpLd, 7, r8.OpHalt}
+	program := []byte{r8.OpLdRN, 7, r8.OpHalt}
 	if err := cpu.LoadProgram(program, 0x0100); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestLoadProgramAtAddress(t *testing.T) {
 func TestLoadProgramAtAddressRunsFromThatAddress(t *testing.T) {
 	t.Parallel()
 	cpu := r8.NewCPU()
-	program := []byte{r8.OpLd, 7, r8.OpHalt}
+	program := []byte{r8.OpLdRN, 7, r8.OpHalt}
 	if err := cpu.LoadProgram(program, 0x0100); err != nil {
 		t.Fatal(err)
 	}
@@ -400,12 +400,12 @@ func TestDisassembleInvalidInput(t *testing.T) {
 		want string
 	}{
 		{"unknown opcode", []byte{0xFF, r8.OpNop}, "???\nnop"},
-		{"ld missing operand", []byte{r8.OpLd}, "ld a, ???"},
+		{"ld missing operand", []byte{r8.OpLdRN}, "ld a, ???"},
 		{"jmp missing operand byte", []byte{r8.OpJmp, 0x02}, "jmp ???"},
 		{"bra missing operand", []byte{r8.OpBra}, "bra ???"},
 		{"beq missing operand", []byte{r8.OpBeq}, "beq ???"},
 		{"bne missing operand", []byte{r8.OpBne}, "bne ???"},
-		{"truncated after valid code", []byte{r8.OpInc, r8.OpLd}, "inc a\nld a, ???"},
+		{"truncated after valid code", []byte{r8.OpIncR, r8.OpLdRN}, "inc a\nld a, ???"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -479,9 +479,9 @@ func TestNextInstruction(t *testing.T) {
 		mem  map[uint16]byte
 		want string
 	}{
-		{"no operand", 0x0000, map[uint16]byte{0x0000: r8.OpInc}, "inc a"},
+		{"no operand", 0x0000, map[uint16]byte{0x0000: r8.OpIncR}, "inc a"},
 		{"unknown opcode", 0x0000, map[uint16]byte{0x0000: 0xFF}, "???"},
-		{"ld at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpLd, 0x0000: 5}, "ld a, 0x05"},
+		{"ld at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpLdRN, 0x0000: 5}, "ld a, 0x05"},
 		{"jmp at second-last byte", 0xFFFE, map[uint16]byte{0xFFFE: r8.OpJmp, 0xFFFF: 0x34, 0x0000: 0x12}, "jmp 0x1234"},
 		{"jmp at last byte", 0xFFFF, map[uint16]byte{0xFFFF: r8.OpJmp, 0x0000: 0x34, 0x0001: 0x12}, "jmp 0x1234"},
 		{"bne negative offset", 0x0010, map[uint16]byte{0x0010: r8.OpBne, 0x0011: 0xFD}, "bne 0xFD"},
@@ -582,7 +582,7 @@ halt`
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt}
+	want := []byte{r8.OpLdRN, 3, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt}
 	if !bytes.Equal(got, want) {
 		t.Errorf("want %v, got %v", want, got)
 	}
@@ -626,11 +626,11 @@ func TestAssembleLabels(t *testing.T) {
 		src  string
 		want []byte
 	}{
-		{"backward branch", "ld a, 0x03\nloop: dec a\nbne loop\nhalt", []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt}},
-		{"forward branch", "beq done\ninc a\ndone: halt", []byte{r8.OpBeq, 1, r8.OpInc, r8.OpHalt}},
-		{"jmp to absolute address", "jmp start\ninc a\nstart: halt", []byte{r8.OpJmp, 0x04, 0x00, r8.OpInc, r8.OpHalt}},
-		{"label on its own line", "loop:\ndec a\nbne loop", []byte{r8.OpDec, r8.OpBne, 0xFD}},
-		{"two labels at one address", "a:\nb: inc a\nbra a\nbra b", []byte{r8.OpInc, r8.OpBra, 0xFD, r8.OpBra, 0xFB}},
+		{"backward branch", "ld a, 0x03\nloop: dec a\nbne loop\nhalt", []byte{r8.OpLdRN, 3, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt}},
+		{"forward branch", "beq done\ninc a\ndone: halt", []byte{r8.OpBeq, 1, r8.OpIncR, r8.OpHalt}},
+		{"jmp to absolute address", "jmp start\ninc a\nstart: halt", []byte{r8.OpJmp, 0x04, 0x00, r8.OpIncR, r8.OpHalt}},
+		{"label on its own line", "loop:\ndec a\nbne loop", []byte{r8.OpDecR, r8.OpBne, 0xFD}},
+		{"two labels at one address", "a:\nb: inc a\nbra a\nbra b", []byte{r8.OpIncR, r8.OpBra, 0xFD, r8.OpBra, 0xFB}},
 		{"label at end of program", "bra end\nend:", []byte{r8.OpBra, 0}},
 		{"label named like a mnemonic", "inc: bra inc", []byte{r8.OpBra, 0xFE}},
 		{"numbers still work beside labels", "x: bra 0xFE\njmp x", []byte{r8.OpBra, 0xFE, r8.OpJmp, 0, 0}},
