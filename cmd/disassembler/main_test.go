@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	r8 "github.com/jgrecu/go-r8"
@@ -54,5 +57,41 @@ func TestRunRequiresOneInputFile(t *testing.T) {
 	t.Parallel()
 	if err := run(nil, &bytes.Buffer{}); err == nil {
 		t.Error("want usage error, got nil")
+	}
+}
+
+func TestRunRejectsTwoPositionalArgs(t *testing.T) {
+	t.Parallel()
+	err := run([]string{"a.bin", "b.bin"}, &bytes.Buffer{})
+	if want := "usage: disassembler [-o output] program.bin"; err == nil || err.Error() != want {
+		t.Errorf("want %q, got %v", want, err)
+	}
+}
+
+func TestRunRejectsBadFlag(t *testing.T) {
+	t.Parallel()
+	err := run([]string{"-bogus", "prog.bin"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("want an error for an undefined flag, got nil")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined: -bogus") {
+		t.Errorf("want a flag error, got %v", err)
+	}
+}
+
+func TestRunMissingInputFile(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "missing.bin")
+	if err := run([]string{"-o", "-", missing}, &bytes.Buffer{}); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("want fs.ErrNotExist, got %v", err)
+	}
+}
+
+func TestRunCannotWriteToNonexistentDirectory(t *testing.T) {
+	t.Parallel()
+	bin := writeTemp(t, "prog.bin", []byte{r8.OpHalt})
+	out := filepath.Join(t.TempDir(), "nope", "prog.src")
+	if err := run([]string{"-o", out, bin}, &bytes.Buffer{}); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("want fs.ErrNotExist, got %v", err)
 	}
 }
