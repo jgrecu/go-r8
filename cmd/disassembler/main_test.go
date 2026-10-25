@@ -20,7 +20,7 @@ func writeTemp(t *testing.T, name string, content []byte) string {
 
 func TestRunWritesSourceToStdout(t *testing.T) {
 	t.Parallel()
-	bin := writeTemp(t, "prog.bin", []byte{r8.OpLd, 3, r8.OpDec, r8.OpBne, 0xFD, r8.OpHalt})
+	bin := writeTemp(t, "prog.bin", []byte{r8.OpLdRN, 3, r8.OpDecR, r8.OpBne, 0xFD, r8.OpHalt})
 	var stdout bytes.Buffer
 	if err := run([]string{"-o", "-", bin}, &stdout); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestRunWritesSourceToStdout(t *testing.T) {
 
 func TestRunWritesSourceToFile(t *testing.T) {
 	t.Parallel()
-	bin := writeTemp(t, "prog.bin", []byte{r8.OpInc, r8.OpHalt})
+	bin := writeTemp(t, "prog.bin", []byte{r8.OpIncR, r8.OpHalt})
 	out := filepath.Join(t.TempDir(), "prog.src")
 	var stdout bytes.Buffer
 	if err := run([]string{"-o", out, bin}, &stdout); err != nil {
