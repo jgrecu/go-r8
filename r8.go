@@ -34,9 +34,9 @@ type CPU struct {
 const (
 	OpHalt byte = 0x00 // stop execution
 	OpNop  byte = 0x01 // do nothing
+	OpLdRN byte = 0x10 // ld R, N: load the following byte into R
 	OpIncR byte = 0x30 // inc R: increment R
 	OpDecR byte = 0x40 // dec R: decrement R
-	OpLdRN byte = 0x10 // ld R, N: load the following byte into R
 	OpJmp  byte = 0xF7 // jump to the following 16-bit little-endian address
 	OpBra  byte = 0xF0 // branch by the following signed byte, relative to the next instruction
 	OpBeq  byte = 0xF1 // branch by the following signed byte if A is zero
