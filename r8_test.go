@@ -319,16 +319,22 @@ func TestLoadProgramTooLarge(t *testing.T) {
 		addr uint16
 	}{
 		{"larger than memory at 0", r8.MemSize + 1, 0},
-		{"one byte past end of memory", 2, 0xFFFF},
-		{"past end of memory at offset", 0x11, 0xFFF0},
+		{"one byte into reset vector at 0", int(r8.ResetVector) + 1, 0},
+		{"at reset vector low byte", 1, r8.ResetVector},
+		{"at reset vector high byte", 1, r8.ResetVector + 1},
+		{"into reset vector at offset", 0x0F, 0xFFF0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			cpu := r8.NewCPU()
-			err := cpu.LoadProgram(make([]byte, c.size), c.addr)
+			cpu.PC = 0x1234
+			err := cpu.LoadProgram(bytes.Repeat([]byte{r8.OpNop}, c.size), c.addr)
 			if !errors.Is(err, r8.ErrProgramTooLarge) {
 				t.Errorf("want ErrProgramTooLarge, got %v", err)
+			}
+			if *cpu != (r8.CPU{PC: 0x1234}) {
+				t.Error("want CPU unchanged after ErrProgramTooLarge")
 			}
 		})
 	}
@@ -341,9 +347,9 @@ func TestLoadProgramFillsMemoryExactly(t *testing.T) {
 		size int
 		addr uint16
 	}{
-		{"whole memory at 0", r8.MemSize, 0},
-		{"last byte of memory", 1, 0xFFFF},
-		{"up to end of memory at offset", 0x10, 0xFFF0},
+		{"all memory below reset vector at 0", int(r8.ResetVector), 0},
+		{"last byte below reset vector", 1, r8.ResetVector - 1},
+		{"up to reset vector at offset", 0x0E, 0xFFF0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -389,6 +395,99 @@ func TestLoadProgramAtAddressRunsFromThatAddress(t *testing.T) {
 	}
 	if cpu.PC != 0x0103 {
 		t.Errorf("want PC 0x0103, got %#04x", cpu.PC)
+	}
+}
+
+func TestLoadProgramWritesResetVector(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	if err := cpu.LoadProgram([]byte{r8.OpHalt}, 0xC000); err != nil {
+		t.Fatal(err)
+	}
+	lo, hi := cpu.Memory[r8.ResetVector], cpu.Memory[r8.ResetVector+1]
+	if lo != 0x00 || hi != 0xC0 {
+		t.Errorf("want reset vector bytes 00 C0, got %02X %02X", lo, hi)
+	}
+}
+
+func TestLoadProgramClearsHalted(t *testing.T) {
+	t.Parallel()
+	cpu := newTestCPU(t, "HALT")
+	mustStep(t, cpu)
+	if err := cpu.LoadProgram([]byte{r8.OpNop}, 0x0100); err != nil {
+		t.Fatal(err)
+	}
+	if cpu.Halted {
+		t.Error("want Halted == false after LoadProgram, got true")
+	}
+}
+
+func TestResetLoadsPCFromLittleEndianResetVector(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Memory[0xFFFE] = 0x34 // low byte
+	cpu.Memory[0xFFFF] = 0x12 // high byte
+	cpu.Reset()
+	if cpu.PC != 0x1234 {
+		t.Errorf("want PC == 0x1234, got %#04x", cpu.PC)
+	}
+}
+
+func TestResetOfNewCPUSetsPCToZero(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.PC = 0x1234
+	cpu.Reset()
+	if cpu.PC != 0 {
+		t.Errorf("want PC == 0 from zeroed reset vector, got %#04x", cpu.PC)
+	}
+}
+
+func TestResetClearsHalted(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.Halted = true
+	cpu.Reset()
+	if cpu.Halted {
+		t.Error("want Halted == false after Reset, got true")
+	}
+}
+
+func TestResetLeavesRegistersAndMemoryUnchanged(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	cpu.R[r8.A] = 0x42
+	cpu.Memory[0x0100] = 0x99
+	cpu.Memory[r8.ResetVector] = 0x00
+	cpu.Memory[r8.ResetVector+1] = 0x01
+	want := cpu.Memory
+	cpu.Reset()
+	if cpu.R[r8.A] != 0x42 {
+		t.Errorf("want A == 0x42, got %#02x", cpu.R[r8.A])
+	}
+	if cpu.Memory != want {
+		t.Error("want Memory unchanged after Reset")
+	}
+}
+
+func TestResetRestartsProgram(t *testing.T) {
+	t.Parallel()
+	cpu := r8.NewCPU()
+	if err := cpu.LoadProgram([]byte{r8.OpIncR | byte(r8.A), r8.OpHalt}, 0x0200); err != nil {
+		t.Fatal(err)
+	}
+	if err := cpu.Run(); err != nil {
+		t.Fatal(err)
+	}
+	cpu.Reset()
+	if err := cpu.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if cpu.R[r8.A] != 2 {
+		t.Errorf("want A == 2 after running twice, got %d", cpu.R[r8.A])
+	}
+	if cpu.PC != 0x0202 {
+		t.Errorf("want PC == 0x0202, got %#04x", cpu.PC)
 	}
 }
 
@@ -676,7 +775,7 @@ func TestAssembleLabelErrors(t *testing.T) {
 		{"forward branch out of range", "bra far\n" + nops(128) + "far:", r8.ErrBadOperand, "line 1:"},
 		{"backward branch out of range", "back:\n" + nops(127) + "bra back", r8.ErrBadOperand, "line 129:"},
 		{"ld rejects a label", "x: ld a, x", r8.ErrBadOperand, "line 1:"},
-		{"program larger than memory", nops(r8.MemSize + 1), r8.ErrProgramTooLarge, "line 65537:"},
+		{"program overlaps reset vector", nops(int(r8.ResetVector) + 1), r8.ErrProgramTooLarge, "line 65535:"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -78,6 +78,11 @@ func parseRegister(s string) (Register, bool) {
 // MemSize is the size of the CPU's memory in bytes.
 const MemSize = 65536
 
+// ResetVector is the address of the little-endian 16-bit reset vector, which
+// holds the address Reset loads into PC. It occupies the last two bytes of
+// memory, so programs must end below it.
+const ResetVector uint16 = 0xFFFE
+
 // Errors returned by LoadProgram, RunN, and Assemble. Use errors.Is to
 // check for them, since they are usually wrapped with more context.
 var (
@@ -285,6 +290,14 @@ func NewCPU() *CPU {
 	return &CPU{}
 }
 
+// Reset puts the CPU into its power-on state: PC is loaded from the reset
+// vector at ResetVector, and the CPU is no longer halted. Registers and memory
+// are left unchanged.
+func (cpu *CPU) Reset() {
+	cpu.PC = binary.LittleEndian.Uint16(cpu.Memory[ResetVector:])
+	cpu.Halted = false
+}
+
 // Step executes the instruction at PC. It does nothing once the CPU is
 // halted. On an unknown opcode it moves PC past it and returns an
 // *IllegalInstructionError.
@@ -343,17 +356,19 @@ func (cpu *CPU) RunN(n int) error {
 	return nil
 }
 
-// LoadProgram copies program into memory starting at addr and sets PC to
-// addr. It returns ErrProgramTooLarge, leaving the CPU unchanged, if program
-// does not fit between addr and the end of memory.
+// LoadProgram copies program into memory starting at addr, points the reset
+// vector at addr, and resets the CPU, so that it runs program from the start.
+// It returns ErrProgramTooLarge, leaving the CPU unchanged, if program does
+// not fit between addr and the reset vector.
 func (cpu *CPU) LoadProgram(program []byte, addr uint16) error {
-	availableSpace := MemSize - int(addr)
+	availableSpace := int(ResetVector) - int(addr)
 	if len(program) > availableSpace {
-		return fmt.Errorf("%w: %d bytes at 0x%04X exceeds memory (available: %d bytes)",
-			ErrProgramTooLarge, len(program), addr, availableSpace)
+		return fmt.Errorf("%w: %d bytes at 0x%04X overlaps the reset vector (available: %d bytes)",
+			ErrProgramTooLarge, len(program), addr, max(availableSpace, 0))
 	}
 	copy(cpu.Memory[addr:], program)
-	cpu.PC = addr
+	binary.LittleEndian.PutUint16(cpu.Memory[ResetVector:], addr)
+	cpu.Reset()
 	return nil
 }
 
@@ -502,7 +517,7 @@ func (p *parser) parseLine(line int, tokens []string) error {
 		// Every register variant of an instruction has the same operand
 		// kind, so the size follows from the base opcode.
 		p.pc += 1 + instructions[op].operand.size()
-		if p.pc > MemSize {
+		if p.pc > int(ResetVector) {
 			return fmt.Errorf("%w: %d bytes", ErrProgramTooLarge, p.pc)
 		}
 		p.stmts = append(p.stmts, s)
